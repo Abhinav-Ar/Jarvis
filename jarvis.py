@@ -1,29 +1,94 @@
-from RealtimeSTT import AudioToTextRecorder
-import assist
-import time
-import tools
+"""Jarvis voice assistant command-line application."""
 
-if __name__ == '__main__':
-    recorder = AudioToTextRecorder(spinner=False, model="tiny.en", language="en", post_speech_silence_duration =0.1, silero_sensitivity = 0.4)
-    hot_words = ["jarvis"]
-    skip_hot_word_check = False
-    print("Say something...")
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from datetime import datetime
+
+from dotenv import load_dotenv
+
+
+def arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="A conversational voice assistant for macOS")
+    parser.add_argument("--text", action="store_true", help="type instead of using the microphone")
+    parser.add_argument("--no-hotword", action="store_true", help="accept every captured phrase")
+    parser.add_argument("--once", action="store_true", help="process one request and exit")
+    parser.add_argument("--list-devices", action="store_true", help="list microphone devices and exit")
+    return parser.parse_args()
+
+
+def main() -> int:
+    load_dotenv()
+    args = arguments()
+    if args.list_devices:
+        from audio import PhraseRecorder
+        print(PhraseRecorder.devices())
+        return 0
+
+    if not os.getenv("OPENAI_API_KEY"):
+        print("OPENAI_API_KEY is missing. Copy .env.example to .env and add your key.", file=sys.stderr)
+        return 2
+
+    from assist import JarvisAssistant
+    assistant = JarvisAssistant()
+    recorder = None
+    if not args.text:
+        from audio import PhraseRecorder
+        recorder = PhraseRecorder()
+
+    hotword = os.getenv("JARVIS_HOTWORD", "jarvis").lower()
+    follow_up = False
+    print("Jarvis is ready. Press Control-C to stop.")
+
     while True:
-        current_text = recorder.text()
-        print(current_text)
-        if any(hot_word in current_text.lower() for hot_word in hot_words) or skip_hot_word_check:
-                    #make sure there is text
-                    if current_text:
-                        print("User: " + current_text)
-                        recorder.stop()
-                        #get time
-                        current_text = current_text + " " + time.strftime("%Y-m-%d %H-%M-%S")
-                        response = assist.ask_question_memory(current_text)
-                        print(response)
-                        speech = response.split('#')[0]
-                        done = assist.TTS(speech)
-                        skip_hot_word_check = True if "?" in response else False
-                        if len(response.split('#')) > 1:
-                            command = response.split('#')[1]
-                            tools.parse_command(command)
-                        recorder.start()
+        try:
+            if args.text:
+                text = input("You: ").strip()
+                if text.lower() in {"exit", "quit"}:
+                    break
+            else:
+                print(f"Listening for ‘{hotword}’…")
+                audio_path = recorder.listen()
+                try:
+                    text = assistant.transcribe(audio_path)
+                finally:
+                    audio_path.unlink(missing_ok=True)
+                if text:
+                    print(f"Heard: {text}")
+
+            if not text:
+                continue
+            if not (args.no_hotword or follow_up or hotword in text.lower()):
+                continue
+
+            # Remove only the first hotword so the model receives a natural request.
+            lowered = text.lower()
+            if hotword in lowered:
+                index = lowered.index(hotword)
+                text = (text[:index] + text[index + len(hotword):]).strip(" ,.!?")
+            if not text:
+                assistant.speak("Yes?")
+                follow_up = True
+                continue
+
+            prompt = f"Local time: {datetime.now().astimezone().isoformat(timespec='minutes')}\nUser: {text}"
+            reply = assistant.ask(prompt)
+            print(f"Jarvis: {reply}")
+            assistant.speak(reply)
+            follow_up = reply.rstrip().endswith("?")
+            if args.once:
+                break
+        except KeyboardInterrupt:
+            print("\nGoodbye.")
+            break
+        except Exception as exc:
+            print(f"Jarvis error: {exc}", file=sys.stderr)
+            if args.once:
+                return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

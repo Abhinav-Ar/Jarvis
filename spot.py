@@ -1,60 +1,58 @@
+"""Optional Spotify integration, initialized only when requested."""
+
+from __future__ import annotations
+
+import os
+
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
-username = ''
-clientID = ''
-clientSecret = ''
-redirect_uri = 'http://localhost:8888/callback'
 
-def spotify_authenicate(client_id, client_secret, redirect_uri, username):
-    scope = "user-read-currently-playing user-modify-playback-state"
-    auth_manager = SpotifyOAuth(client_id, client_secret, redirect_uri, scope=scope, username=username)
-    return spotipy.Spotify(auth_manager = auth_manager)
-
-spotify = spotify_authenicate(clientID, clientSecret, redirect_uri, username)
-
-def get_current_playing_info():
-    global spotify
-    current_track = spotify.current_user_playing_track()
-    if current_track is None:
-        return None
-    
-    artist_name = current_track['item']['artists'][0]['name']
-    album_name = current_track['item']['album']['name']
-    track_title = current_track['item']['name']
-
-    return {
-        "artist": artist_name,
-        "album": album_name,
-        "title": track_title
-    }
+def _client() -> spotipy.Spotify:
+    missing = [
+        name
+        for name in ("SPOTIPY_CLIENT_ID", "SPOTIPY_CLIENT_SECRET", "SPOTIPY_REDIRECT_URI")
+        if not os.getenv(name)
+    ]
+    if missing:
+        raise RuntimeError("Spotify is not configured; missing " + ", ".join(missing))
+    auth = SpotifyOAuth(
+        scope="user-read-playback-state user-read-currently-playing user-modify-playback-state",
+        open_browser=True,
+    )
+    return spotipy.Spotify(auth_manager=auth)
 
 
-def start_music():
-    global spotify
-    try:
+def control(action: str) -> dict:
+    spotify = _client()
+    if action == "play":
         spotify.start_playback()
-    except spotipy.SpotifyException as e:
-        return f"Error in starting playback: {str(e)}"
-    
-def stop_music():
-    global spotify
-    try:
+    elif action == "pause":
         spotify.pause_playback()
-    except spotipy.SpotifyException as e:
-        return f"Error in starting playback: {str(e)}"
-    
-def skip_to_next():
-    global spotify
-    try:
+    elif action == "next":
         spotify.next_track()
-    except spotipy.SpotifyException as e:
-        return f"Error in starting playback: {str(e)}"
-    
-def skip_to_previous():
-    global spotify
-    try:
+    elif action == "previous":
         spotify.previous_track()
-    except spotipy.SpotifyException as e:
-        return f"Error in starting playback: {str(e)}"
-    
+    elif action == "current":
+        state = spotify.current_user_playing_track()
+        if not state or not state.get("item"):
+            return {"ok": True, "playing": False}
+        track = state["item"]
+        return {
+            "ok": True,
+            "playing": bool(state.get("is_playing")),
+            "title": track.get("name"),
+            "artists": [artist["name"] for artist in track.get("artists", [])],
+            "album": track.get("album", {}).get("name"),
+        }
+    else:
+        return {"ok": False, "error": f"Unknown Spotify action: {action}"}
+    return {"ok": True, "action": action}
+
+
+# Compatibility wrappers.
+def start_music(): return control("play")
+def stop_music(): return control("pause")
+def skip_to_next(): return control("next")
+def skip_to_previous(): return control("previous")
+def get_current_playing_info(): return control("current")

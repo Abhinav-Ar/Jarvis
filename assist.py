@@ -6,12 +6,14 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from openai import OpenAI
 import sounddevice as sd
 
 import tools
+import activity
 from task_engine import TaskEngine
 
 
@@ -19,6 +21,10 @@ SYSTEM_PROMPT = """You are Jarvis, a concise, warm, capable voice assistant.
 Address the user naturally. Because answers are spoken aloud, default to at most
 45 words and three compact points unless detail is explicitly requested. Do not
 include raw URLs in prose; citations may remain attached to displayed text.
+Speak like a capable human assistant, not an audit log. Never say "audit result,"
+"evidenced," "success criteria," "unmet," or expose process exit codes in the
+final reply. Naturally summarize what worked, what remains, why, and what you can
+do next. Never dump internal plans or diagnostic bookkeeping.
 Use tools when the user asks for current research, weather, searches, Mac actions,
 Apple apps, Spotify, Todoist, or Home Assistant. Only perform actions that the
 user explicitly requested; never infer a side effect from casual conversation.
@@ -46,6 +52,10 @@ tools such as browser navigation, Spotify, and Apple app tools over coordinates.
 For Git work, use repository-aware Git tools instead of operating GitHub Desktop
 with screen coordinates. First inspect repositories and status, infer a concise
 commit message from the diff summary, then commit and push when explicitly asked.
+When the user names GitHub Desktop, open it and keep it visible, while performing
+the repository operation through background Git so no Terminal window is opened;
+GitHub Desktop will reflect the same repository state. Explain this naturally only
+if asked. If a commit succeeded but push failed, retry the push without recommitting.
 An explicit request containing both "commit" and "push" is confirmation for that
 operation; do not ask again. Opening GitHub Desktop may be an additional first
 step when requested, but it is not a substitute for completing the Git operation.
@@ -78,6 +88,7 @@ class JarvisAssistant:
         self.task_engine = TaskEngine()
 
     def ask(self, question: str) -> str:
+        activity.update("planning", "Planning…")
         plan = self.task_engine.plan(self.client, self.model, self.reasoning_effort, question)
         planned_input = (
             f"User request:\n{question}\n\nStructured task plan:\n{self.task_engine.context()}\n"
@@ -99,6 +110,7 @@ class JarvisAssistant:
             calls = [item for item in response.output if item.type == "function_call"]
             if not calls:
                 if plan.requires_tools and (tools_since_audit or not audit_performed):
+                    activity.update("verifying", "Checking…")
                     response = self.client.responses.create(
                         model=self.model,
                         reasoning={"effort": self.reasoning_effort},
@@ -127,22 +139,27 @@ class JarvisAssistant:
                 self.task_engine.finish(status)
                 return answer
 
-            outputs = []
             tools_since_audit = True
-            for call in calls:
+
+            def run_call(call):
                 try:
                     arguments = json.loads(call.arguments or "{}")
+                    activity.update("working", "Working…", call.name.replace("_", " "))
                     result = tools.execute(call.name, arguments)
                 except Exception as exc:  # Tool failures should not stop conversation.
                     result = {"ok": False, "error": str(exc)}
                 self.task_engine.record_tool(call.name, result)
-                outputs.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": call.call_id,
-                        "output": json.dumps(result),
-                    }
-                )
+                return {
+                    "type": "function_call_output",
+                    "call_id": call.call_id,
+                    "output": json.dumps(result),
+                }
+
+            if len(calls) > 1:
+                with ThreadPoolExecutor(max_workers=min(4, len(calls))) as executor:
+                    outputs = list(executor.map(run_call, calls))
+            else:
+                outputs = [run_call(calls[0])]
 
             response = self.client.responses.create(
                 model=self.model,

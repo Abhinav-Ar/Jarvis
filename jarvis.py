@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+import activity
+import fast_commands
 
 
 def arguments() -> argparse.Namespace:
@@ -27,14 +31,31 @@ def request_is_active(text: str, *, text_mode: bool, no_hotword: bool, follow_up
 
 
 def is_logoff_command(text: str) -> bool:
-    normalized = " ".join(text.lower().strip(" ,.?!").split())
+    normalized = " ".join(re.sub(r"[^a-z0-9 ]", " ", text.lower()).split())
+    for prefix in ("hey ", "okay ", "ok ", "please "):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix):]
     return normalized in {"log off", "log out", "logout", "go offline", "shut down jarvis"}
 
 
-def reset_desktop_control() -> None:
-    """Desktop control never survives a Jarvis voice session."""
+def stop_desktop_control() -> None:
+    """Remove the active-session control grant while Jarvis is stopped."""
     flag = Path.home() / "Library/Application Support/Jarvis/.runtime/desktop-control-enabled"
     flag.unlink(missing_ok=True)
+
+
+def start_desktop_control() -> None:
+    """Every new Jarvis session defaults to desktop control on."""
+    runtime = Path.home() / "Library/Application Support/Jarvis/.runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "desktop-control-disabled").unlink(missing_ok=True)
+    (runtime / "desktop-control-enabled").touch()
+
+
+def is_complex_request(text: str) -> bool:
+    lowered = text.lower()
+    markers = (" and then ", "commit", "push", "fill out", "organize", "all of", "after that")
+    return any(marker in lowered for marker in markers)
 
 
 def main() -> int:
@@ -50,6 +71,7 @@ def main() -> int:
         return 2
 
     print("Starting Jarvis…", flush=True)
+    start_desktop_control()
     from assist import JarvisAssistant
     assistant = JarvisAssistant()
     recorder = None
@@ -61,6 +83,7 @@ def main() -> int:
     follow_up = False
     pending_audio_path = None
     print("Jarvis is ready. Press Control-C to stop.")
+    activity.update("listening", "Listening")
 
     while True:
         try:
@@ -76,9 +99,11 @@ def main() -> int:
                     pending_audio_path = None
                 else:
                     print(f"Listening for ‘{hotword}’…")
+                    activity.update("listening", "Listening")
                     audio_path = recorder.listen()
                 try:
                     print("Transcribing…", flush=True)
+                    activity.update("transcribing", "Hearing…")
                     transcription_started = time.perf_counter()
                     text = assistant.transcribe(audio_path)
                     transcription_seconds = time.perf_counter() - transcription_started
@@ -109,18 +134,24 @@ def main() -> int:
                 continue
 
             if is_logoff_command(text):
-                reset_desktop_control()
+                activity.update("stopped", "Stopped")
+                stop_desktop_control()
                 print("Jarvis: Logging off.")
                 assistant.speak("Logging off.")
                 break
 
             prompt = f"Local time: {datetime.now().astimezone().isoformat(timespec='minutes')}\nUser: {text}"
+            activity.cue("heard")
+            if is_complex_request(text):
+                activity.acknowledge()
             print("Thinking…", flush=True)
+            activity.update("planning", "Planning…", text[:100])
             thinking_started = time.perf_counter()
-            reply = assistant.ask(prompt)
+            reply = fast_commands.execute(text) or assistant.ask(prompt)
             thinking_seconds = time.perf_counter() - thinking_started
             print(f"Jarvis ({thinking_seconds:.1f}s thinking): {reply}")
             speaking_started = time.perf_counter()
+            activity.update("speaking", "Responding…")
             voice_start_seconds, interrupted, interruption_audio = assistant.speak(
                 reply, allow_barge_in=not args.text
             )
@@ -137,12 +168,17 @@ def main() -> int:
                     follow_up = True
                     continue
             follow_up = reply.rstrip().endswith("?")
+            activity.update("needs_input" if follow_up else "listening", "Needs you" if follow_up else "Listening")
+            if not follow_up:
+                activity.cue("complete")
             if args.once:
                 break
         except KeyboardInterrupt:
             print("\nGoodbye.")
             break
         except Exception as exc:
+            activity.update("error", "Problem", str(exc)[:120])
+            activity.cue("error")
             print(f"Jarvis error: {exc}", file=sys.stderr)
             if args.once:
                 return 1

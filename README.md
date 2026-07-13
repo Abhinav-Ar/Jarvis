@@ -16,6 +16,12 @@ tools when requested, and speaks the result through the Mac's audio output.
   when the user explicitly requests the complete operation
 - Plan multi-step goals, insert safe prerequisites, journal tool evidence, recover
   from failed steps, and audit success criteria before reporting completion
+- Show live hearing, planning, working, checking, speaking, needs-input, and error
+  states through the menu bar and a temporary floating progress panel
+- Use local activation/completion sounds and an “On it” acknowledgement for
+  longer tasks
+- Route common local commands instantly and skip full planning and auditing for
+  straightforward single-step requests
 - Spoken responses through OpenAI text-to-speech
 
 ### Mac control
@@ -124,10 +130,11 @@ only disables that related action.
 The Jarvis menu provides direct shortcuts to the Screen Recording and
 Accessibility panes. Add `~/Applications/Jarvis Menu.app` or enable
 **Jarvis Menu** in both lists, then restart it
-from the login service if macOS requests a restart. Desktop control remains off
-until you explicitly choose **Enable Desktop Control**. It automatically resets
-to off when Jarvis stops, logs off, or begins a new login session. Desktop control
-does not change the menu color: cyan means listening and red means stopped.
+from the login service if macOS requests a restart. Desktop control defaults on
+whenever Jarvis starts. Choosing **Disable Desktop Control** is an emergency stop
+for the current session; the next Jarvis start defaults it back on. Desktop control does not
+change the menu color; colors reflect live activity, while red means stopped or
+errored.
 
 ## Run
 

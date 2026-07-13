@@ -18,7 +18,7 @@ mkdir -p "$APP_DIR/.runtime" "$HOME/Library/LaunchAgents" "$HOME/Applications"
 
 # LaunchAgents cannot reliably read projects under macOS-protected Documents.
 # Deploy a minimal private runtime under Application Support instead.
-for file in jarvis.py assist.py audio.py tools.py spot.py mac_tools.py integrations.py desktop.py git_tools.py task_engine.py requirements.txt start.sh; do
+for file in jarvis.py assist.py audio.py activity.py fast_commands.py tools.py spot.py mac_tools.py integrations.py desktop.py git_tools.py task_engine.py requirements.txt start.sh; do
   /usr/bin/ditto "$PROJECT_DIR/$file" "$APP_DIR/$file"
 done
 /usr/bin/ditto "$PROJECT_DIR/.env" "$APP_DIR/.env"
@@ -35,6 +35,7 @@ fi
 mkdir -p "$MENU_APP/Contents/MacOS" "$APP_DIR/.swift-cache"
 /usr/bin/swiftc \
   -module-cache-path "$APP_DIR/.swift-cache" \
+  -framework UserNotifications \
   "$PROJECT_DIR/macos/JarvisMenu.swift" \
   -o "$MENU_APP/Contents/MacOS/JarvisMenu"
 /usr/bin/swiftc \

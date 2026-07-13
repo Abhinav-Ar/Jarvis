@@ -67,8 +67,31 @@ class TaskEngine:
         runtime = Path(os.getenv("JARVIS_RUNTIME_DIR", Path.home() / "Library/Application Support/Jarvis/.runtime"))
         self.state_path = runtime / "active-task.json"
         self.record: TaskRecord | None = None
+        self.lane = "simple"
+
+    @staticmethod
+    def route(request: str) -> str:
+        text = request.lower()
+        markers = (
+            " and then ", "after that", "commit", "push", "fill out", "organize",
+            "compare", "research", "all of", "multiple", "workflow",
+        )
+        return "complex" if any(marker in text for marker in markers) else "simple"
 
     def plan(self, client: Any, model: str, reasoning_effort: str, request: str) -> TaskPlan:
+        self.lane = self.route(request)
+        if self.lane == "simple":
+            plan = TaskPlan(
+                goal=request,
+                requires_tools=False,
+                success_criteria=["Answer or perform the single requested action"],
+                steps=["Handle the request directly"],
+                risk="low",
+                missing_information=[],
+            )
+            self.record = TaskRecord(uuid.uuid4().hex, request, plan)
+            self._save()
+            return plan
         planner_input = request
         if self.record and time.time() - self.record.updated_at < 600:
             planner_input = (

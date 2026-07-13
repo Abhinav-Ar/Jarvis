@@ -30,6 +30,21 @@ class GitToolTests(unittest.TestCase):
             self.assertEqual(result["branch"], "main")
             self.assertIn("assist.py", result["diff_summary"])
 
+    def test_existing_commit_can_be_pushed_without_recommitting(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            repo = root / "Jarvis"
+            (repo / ".git").mkdir(parents=True)
+            responses = ["", "abc123", "main", "git@github.com:user/Jarvis.git", "", "", "0"]
+            with patch.object(git_tools, "REPOSITORY_ROOT", root), patch(
+                "git_tools._git", side_effect=responses
+            ) as git:
+                result = git_tools.commit_and_push("Jarvis", "Update Jarvis", True)
+            self.assertTrue(result["pushed"])
+            self.assertFalse(result["committed"])
+            calls = [call.args for call in git.call_args_list]
+            self.assertIn((repo.resolve(), "push", "--set-upstream", "origin", "main"), calls)
+
 
 if __name__ == "__main__":
     unittest.main()

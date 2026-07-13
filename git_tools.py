@@ -11,13 +11,20 @@ REPOSITORY_ROOT = Path.home() / "Documents" / "GitHub"
 
 def _git(repository: Path, *arguments: str, timeout: int = 30) -> str:
     result = subprocess.run(
-        ["/usr/bin/git", "-C", str(repository), *arguments],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
+        ["/usr/bin/git", "-C", str(repository), *arguments], capture_output=True,
+        text=True, timeout=timeout,
     )
+    if result.returncode:
+        detail = (result.stderr or result.stdout).strip()
+        raise RuntimeError(detail or f"Git {arguments[0]} failed.")
     return result.stdout.strip()
+
+
+def _optional_git(repository: Path, *arguments: str) -> str:
+    try:
+        return _git(repository, *arguments)
+    except RuntimeError:
+        return ""
 
 
 def _resolve_repository(repository: str) -> Path:
@@ -70,18 +77,42 @@ def commit_and_push(repository: str, message: str, confirmed: bool) -> dict:
     if not message.strip():
         return {"ok": False, "error": "A non-empty commit message is required."}
     before = _git(repo, "status", "--porcelain=v1")
-    if not before:
-        return {"ok": False, "error": "There are no changes to commit."}
-    _git(repo, "add", "--all")
-    _git(repo, "commit", "-m", message.strip(), timeout=60)
+    committed = False
+    if before:
+        _git(repo, "add", "--all")
+        _git(repo, "commit", "-m", message.strip(), timeout=60)
+        committed = True
     commit = _git(repo, "rev-parse", "--short", "HEAD")
     branch = _git(repo, "branch", "--show-current")
-    _git(repo, "push", timeout=120)
+    if not branch:
+        return {"ok": False, "error": "The repository is not currently on a named branch."}
+    remote = _optional_git(repo, "remote", "get-url", "origin")
+    if not remote:
+        return {"ok": False, "error": "This repository has no origin remote configured."}
+    upstream = _optional_git(repo, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    try:
+        if upstream:
+            _git(repo, "push", timeout=120)
+        else:
+            _git(repo, "push", "--set-upstream", "origin", branch, timeout=120)
+    except RuntimeError as exc:
+        return {
+            "ok": False,
+            "repository": repo.name,
+            "branch": branch,
+            "commit": commit,
+            "committed": committed,
+            "error": str(exc),
+            "recovery": "Resolve GitHub authentication or remote access, then retry push; do not recommit.",
+        }
+    ahead = int(_git(repo, "rev-list", "--count", "@{u}..HEAD") or "0")
     return {
         "ok": True,
         "repository": repo.name,
         "branch": branch,
         "commit": commit,
         "message": message.strip(),
+        "committed": committed,
         "pushed": True,
+        "verified_up_to_date": ahead == 0,
     }

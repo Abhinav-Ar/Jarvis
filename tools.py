@@ -331,6 +331,22 @@ TOOL_DEFINITIONS = [
     },
     {
         "type": "function",
+        "name": "git_commit",
+        "description": "Stage all changes and create a local commit without pushing. Use when the user requests commit but does not request push. Inspect status first and infer a useful message. Set confirmed true only for an explicit commit request.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "repository": {"type": "string"},
+                "message": {"type": "string"},
+                "confirmed": {"type": "boolean"},
+            },
+            "required": ["repository", "message", "confirmed"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
         "name": "desktop_action",
         "description": "Perform one bounded Mac input action after screen inspection. Desktop control must be visibly enabled in the menu. Never interact with passwords, authentication codes, payment data, purchases, deletions, messages, or final form submission without explicit confirmation. Coordinates use screenshot pixels.",
         "parameters": {
@@ -441,6 +457,7 @@ def execute(name: str, arguments: dict) -> dict:
         "git_repositories": git_tools.repositories,
         "git_status": git_tools.status,
         "git_commit_and_push": git_tools.commit_and_push,
+        "git_commit": git_tools.commit,
     }
     if name not in handlers:
         return {"ok": False, "error": f"Unknown tool: {name}"}

@@ -11,13 +11,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var controlFlag = appDirectory.appendingPathComponent(".runtime/desktop-control-enabled")
     private lazy var disabledFlag = appDirectory.appendingPathComponent(".runtime/desktop-control-disabled")
     private lazy var activityFile = appDirectory.appendingPathComponent(".runtime/activity.json")
+    private lazy var previewFlag = appDirectory.appendingPathComponent(".runtime/hud-preview")
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
     private var detailMenuItem: NSMenuItem!
     private var desktopControlItem: NSMenuItem!
     private var timer: Timer?
-    private var hud: NSPanel?
-    private var hudLabel: NSTextField?
+    private var hud: NSWindow?
+    private var hudView: JarvisHUDView?
     private var previousState = ""
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -45,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Open Recent Log", action: #selector(openLog), keyEquivalent: "l"))
         menu.addItem(NSMenuItem(title: "Open Runtime Folder", action: #selector(openRuntime), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Preview Full-Screen HUD", action: #selector(previewHUD), keyEquivalent: "h"))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Screen Recording Permission…", action: #selector(openScreenPermission), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Accessibility Permission…", action: #selector(openAccessibilityPermission), keyEquivalent: ""))
@@ -78,6 +80,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return result.0 == 0 && result.1.contains("state = running")
     }
 
+    private func targetScreen() -> NSScreen {
+        guard let application = NSWorkspace.shared.frontmostApplication else {
+            return NSScreen.main ?? NSScreen.screens.first!
+        }
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        if let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] {
+            for window in windows {
+                let owner = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
+                let layer = (window[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 1
+                guard owner == application.processIdentifier, layer == 0,
+                      let dictionary = window[kCGWindowBounds as String] as? NSDictionary,
+                      let bounds = CGRect(dictionaryRepresentation: dictionary) else { continue }
+                let center = CGPoint(x: bounds.midX, y: bounds.midY)
+                for screen in NSScreen.screens {
+                    guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { continue }
+                    if CGDisplayBounds(CGDirectDisplayID(number.uint32Value)).contains(center) {
+                        return screen
+                    }
+                }
+            }
+        }
+        let mouse = NSEvent.mouseLocation
+        return NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main ?? NSScreen.screens.first!
+    }
+
     @objc private func refreshStatus() {
         let running = isRunning()
         if !running {
@@ -95,8 +122,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             label = value["label"] as? String ?? label
             detail = value["detail"] as? String ?? ""
         }
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: previewFlag.path),
+           let modified = attributes[.modificationDate] as? Date,
+           Date().timeIntervalSince(modified) < 10 {
+            state = "working"
+            label = "Working…"
+            detail = "Previewing the Jarvis command interface"
+        }
         let colors: [String: NSColor] = [
-            "listening": .systemCyan, "transcribing": .systemYellow,
+            "listening": .systemCyan, "session": .systemCyan, "transcribing": .systemYellow,
             "planning": .systemBlue, "working": .systemPurple,
             "verifying": .systemIndigo, "speaking": .systemGreen,
             "needs_input": .systemOrange, "error": .systemRed, "stopped": .systemRed,
@@ -135,28 +169,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateHUD(state: String, label: String, detail: String) {
-        let visible = ["transcribing", "planning", "working", "verifying", "needs_input", "error"].contains(state)
+        let visible = ["session", "transcribing", "planning", "working", "verifying", "speaking", "needs_input", "error"].contains(state)
         if !visible { hud?.orderOut(nil); return }
         if hud == nil {
-            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 86), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-            panel.level = .floating
+            let frame = targetScreen().visibleFrame
+            let panel = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            panel.level = .screenSaver
             panel.isOpaque = false
-            panel.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.94)
-            panel.hasShadow = true
+            panel.backgroundColor = .clear
+            panel.hasShadow = false
+            panel.ignoresMouseEvents = true
+            panel.hidesOnDeactivate = false
+            panel.isReleasedWhenClosed = false
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            let field = NSTextField(labelWithString: "")
-            field.frame = NSRect(x: 20, y: 14, width: 320, height: 58)
-            field.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
-            field.maximumNumberOfLines = 3
-            panel.contentView?.addSubview(field)
+            let view = JarvisHUDView(frame: NSRect(origin: .zero, size: frame.size))
+            view.autoresizingMask = [.width, .height]
+            panel.contentView = view
             hud = panel
-            hudLabel = field
+            hudView = view
         }
-        hudLabel?.stringValue = detail.isEmpty ? "Jarvis\n\(label)" : "Jarvis — \(label)\n\(detail)"
-        if let screen = NSScreen.main {
-            let frame = screen.visibleFrame
-            hud?.setFrameOrigin(NSPoint(x: frame.maxX - 380, y: frame.maxY - 110))
+        var goal = ""
+        var steps: [String] = []
+        var events = 0
+        let taskFile = appDirectory.appendingPathComponent(".runtime/active-task.json")
+        if let data = try? Data(contentsOf: taskFile),
+           let task = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let plan = task["plan"] as? [String: Any] {
+                goal = plan["goal"] as? String ?? ""
+                steps = plan["steps"] as? [String] ?? []
+            }
+            events = (task["events"] as? [[String: Any]])?.count ?? 0
         }
+        hudView?.state = state
+        hudView?.label = label
+        hudView?.detail = detail
+        hudView?.goal = goal
+        hudView?.steps = steps
+        hudView?.eventCount = events
+        hudView?.needsDisplay = true
+        let frame = targetScreen().visibleFrame
+        hud?.setFrame(frame, display: true)
+        hudView?.frame = NSRect(origin: .zero, size: frame.size)
         hud?.orderFrontRegardless()
     }
 
@@ -212,6 +265,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(appDirectory)
     }
 
+    @objc private func previewHUD() {
+        FileManager.default.createFile(atPath: previewFlag.path, contents: Data())
+        refreshStatus()
+    }
+
     @objc private func openScreenPermission() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
             NSWorkspace.shared.open(url)
@@ -226,7 +284,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 }
 
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.run()
+@main
+struct JarvisMenuApplication {
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        app.run()
+    }
+}

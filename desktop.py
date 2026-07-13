@@ -6,9 +6,11 @@ import base64
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from openai import OpenAI
+import activity
 
 
 RUNTIME_DIR = Path.home() / "Library" / "Application Support" / "Jarvis" / ".runtime"
@@ -26,9 +28,15 @@ HELPER = (
 def inspect_screen(question: str) -> dict:
     path = Path(tempfile.gettempdir()) / "jarvis-screen.png"
     try:
+        activity.update("observing", "Looking…", "Reading the desktop")
+        time.sleep(0.6)  # Let the click-through HUD hide before capture.
         if not HELPER.exists():
             return {"ok": False, "error": "The desktop helper is not installed."}
-        subprocess.run([str(HELPER), "screenshot", str(path)], check=True, timeout=15)
+        capture = subprocess.run(
+            [str(HELPER), "screenshot", str(path)], check=True,
+            capture_output=True, text=True, timeout=30,
+        )
+        display_mapping = capture.stdout.strip()
         encoded = base64.b64encode(path.read_bytes()).decode("ascii")
         client = OpenAI()
         response = client.responses.create(
@@ -43,9 +51,11 @@ def inspect_screen(question: str) -> dict:
                             "text": (
                                 "Analyze this current macOS screenshot for the user's request. "
                                 "Describe only what is relevant. When interaction is requested, "
-                                "include approximate pixel center coordinates for relevant controls. "
+                                "identify the screen number and include physical global coordinates "
+                                "for relevant controls by applying the supplied montage mapping. "
                                 "Never transcribe passwords, authentication codes, payment details, "
-                                "or private keys. Request: " + question
+                                "or private keys. Display mapping: " + display_mapping +
+                                ". Request: " + question
                             ),
                         },
                         {

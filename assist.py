@@ -59,6 +59,7 @@ if asked. If a commit succeeded but push failed, retry the push without recommit
 An explicit request containing both "commit" and "push" is confirmation for that
 operation; do not ask again. Opening GitHub Desktop may be an additional first
 step when requested, but it is not a substitute for completing the Git operation.
+For a commit-only request, use git_commit and never call git_commit_and_push.
 Use screen inspection and desktop actions only as a fallback when no semantic tool
 can do the job. Text the user explicitly asked you to type is confirmed, but typing
 does not authorize submitting it. If an app fails to become frontmost, retry using
@@ -86,6 +87,11 @@ class JarvisAssistant:
         self.tts_model = os.getenv("OPENAI_TTS_MODEL", "tts-1")
         self.previous_response_id: str | None = None
         self.task_engine = TaskEngine()
+
+    def reset_session(self) -> None:
+        """Start the next wake session as a fresh ChatGPT-style conversation."""
+        self.previous_response_id = None
+        self.task_engine.reset()
 
     def ask(self, question: str) -> str:
         activity.update("planning", "Planning…")
@@ -144,7 +150,11 @@ class JarvisAssistant:
             def run_call(call):
                 try:
                     arguments = json.loads(call.arguments or "{}")
-                    activity.update("working", "Working…", call.name.replace("_", " "))
+                    if call.name == "desktop_action" and arguments.get("action") == "click":
+                        detail = f"Clicking interface at {arguments.get('x')}, {arguments.get('y')}"
+                    else:
+                        detail = call.name.replace("_", " ")
+                    activity.update("working", "Working…", detail)
                     result = tools.execute(call.name, arguments)
                 except Exception as exc:  # Tool failures should not stop conversation.
                     result = {"ok": False, "error": str(exc)}

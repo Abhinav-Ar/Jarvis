@@ -30,16 +30,54 @@ case "screenshot":
                 false,
                 onScreenWindowsOnly: true
             )
-            guard let display = content.displays.first else { fail("No display is available") }
-            let filter = SCContentFilter(display: display, excludingWindows: [])
-            let configuration = SCStreamConfiguration()
-            configuration.width = display.width
-            configuration.height = display.height
-            configuration.showsCursor = true
-            let image = try await SCScreenshotManager.captureImage(
-                contentFilter: filter,
-                configuration: configuration
-            )
+            guard !content.displays.isEmpty else { fail("No display is available") }
+            var captures: [(SCDisplay, CGImage)] = []
+            for display in content.displays {
+                let filter = SCContentFilter(display: display, excludingWindows: [])
+                let configuration = SCStreamConfiguration()
+                configuration.width = display.width
+                configuration.height = display.height
+                configuration.showsCursor = true
+                let image = try await SCScreenshotManager.captureImage(
+                    contentFilter: filter,
+                    configuration: configuration
+                )
+                captures.append((display, image))
+            }
+            let gutter = 12
+            let totalWidth = captures.reduce(0) { $0 + $1.1.width } + gutter * max(0, captures.count - 1)
+            let totalHeight = captures.map { $0.1.height }.max() ?? 1
+            let colorSpace = CGColorSpaceCreateDeviceRGB()
+            guard let context = CGContext(
+                data: nil, width: totalWidth, height: totalHeight,
+                bitsPerComponent: 8, bytesPerRow: totalWidth * 4,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { fail("Unable to create multi-display canvas") }
+            context.setFillColor(CGColor(gray: 0.02, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: totalWidth, height: totalHeight))
+            var offsetX = 0
+            var metadata: [[String: Any]] = []
+            for (index, capture) in captures.enumerated() {
+                let display = capture.0
+                let image = capture.1
+                context.draw(image, in: CGRect(x: offsetX, y: totalHeight - image.height, width: image.width, height: image.height))
+                let global = CGDisplayBounds(display.displayID)
+                metadata.append([
+                    "screen": index + 1,
+                    "display_id": display.displayID,
+                    "montage_x": offsetX,
+                    "montage_y": totalHeight - image.height,
+                    "pixel_width": image.width,
+                    "pixel_height": image.height,
+                    "global_x": global.origin.x,
+                    "global_y": global.origin.y,
+                    "global_width": global.width,
+                    "global_height": global.height,
+                ])
+                offsetX += image.width + gutter
+            }
+            guard let image = context.makeImage() else { fail("Unable to render multi-display canvas") }
             let url = URL(fileURLWithPath: args[2]) as CFURL
             guard let destination = CGImageDestinationCreateWithURL(
                 url,
@@ -49,6 +87,16 @@ case "screenshot":
             ) else { fail("Unable to create screenshot destination") }
             CGImageDestinationAddImage(destination, image, nil)
             guard CGImageDestinationFinalize(destination) else { fail("Unable to save screenshot") }
+            let mapping: [String: Any] = [
+                "montage_width": totalWidth,
+                "montage_height": totalHeight,
+                "displays": metadata,
+                "coordinate_rule": "For a point (mx,my) inside a display: gx=global_x+(mx-montage_x)*global_width/pixel_width; gy=global_y+(my-montage_y)*global_height/pixel_height",
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: mapping),
+               let line = String(data: data, encoding: .utf8) {
+                print(line)
+            }
             exit(0)
         } catch {
             fail("Screen capture failed: \(error.localizedDescription)")

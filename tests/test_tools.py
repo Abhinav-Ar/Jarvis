@@ -31,6 +31,7 @@ class ToolTests(unittest.TestCase):
                 "spotify_play_playlist", "spotify_create_discovery_playlist",
                 "desktop_inspect", "desktop_action",
                 "git_repositories", "git_status", "git_commit_and_push",
+                "git_commit",
             }
         self.assertEqual(function_names, handler_names)
 

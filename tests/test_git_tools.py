@@ -45,6 +45,19 @@ class GitToolTests(unittest.TestCase):
             calls = [call.args for call in git.call_args_list]
             self.assertIn((repo.resolve(), "push", "--set-upstream", "origin", "main"), calls)
 
+    def test_commit_only_does_not_push(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            repo = root / "Jarvis"
+            (repo / ".git").mkdir(parents=True)
+            responses = [" M app.py", "", "", "abc123", ""]
+            with patch.object(git_tools, "REPOSITORY_ROOT", root), patch(
+                "git_tools._git", side_effect=responses
+            ) as git:
+                result = git_tools.commit("Jarvis", "Update app", True)
+            self.assertTrue(result["working_tree_clean"])
+            self.assertNotIn("push", [part for call in git.call_args_list for part in call.args])
+
 
 if __name__ == "__main__":
     unittest.main()

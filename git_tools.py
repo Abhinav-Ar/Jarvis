@@ -66,6 +66,28 @@ def status(repository: str) -> dict:
     }
 
 
+def commit(repository: str, message: str, confirmed: bool) -> dict:
+    if not confirmed:
+        return {"ok": False, "confirmation_required": True, "error": "The user must explicitly request a commit."}
+    repo = _resolve_repository(repository)
+    if not message.strip():
+        return {"ok": False, "error": "A non-empty commit message is required."}
+    changes = _git(repo, "status", "--porcelain=v1")
+    if not changes:
+        return {"ok": True, "repository": repo.name, "already_clean": True, "message": "There were no uncommitted changes."}
+    _git(repo, "add", "--all")
+    _git(repo, "commit", "-m", message.strip(), timeout=60)
+    commit_id = _git(repo, "rev-parse", "--short", "HEAD")
+    remaining = _git(repo, "status", "--porcelain=v1")
+    return {
+        "ok": not bool(remaining),
+        "repository": repo.name,
+        "commit": commit_id,
+        "message": message.strip(),
+        "working_tree_clean": not bool(remaining),
+    }
+
+
 def commit_and_push(repository: str, message: str, confirmed: bool) -> dict:
     if not confirmed:
         return {

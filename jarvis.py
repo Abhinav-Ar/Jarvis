@@ -38,6 +38,26 @@ def is_logoff_command(text: str) -> bool:
     return normalized in {"log off", "log out", "logout", "go offline", "shut down jarvis"}
 
 
+def is_satisfied_command(text: str) -> bool:
+    normalized = " ".join(re.sub(r"[^a-z0-9' ]", " ", text.lower()).split())
+    normalized = normalized.replace("i'm", "i am").replace("that's", "that is")
+    return normalized in {
+        "i am satisfied", "i am satisfied with my care", "that is all",
+        "that will be all", "thanks that is all", "thank you that is all",
+        "dismiss", "dismiss jarvis", "goodbye", "goodbye jarvis", "end session",
+    }
+
+
+def strip_wake_word(text: str, hotword: str) -> str:
+    lowered = text.lower()
+    if hotword not in lowered:
+        return text.strip()
+    index = lowered.index(hotword)
+    result = (text[:index] + text[index + len(hotword):]).strip(" ,.!?")
+    result = re.sub(r"^(hey|okay|ok)\b[\s,]*", "", result, flags=re.IGNORECASE)
+    return result.strip(" ,.!?")
+
+
 def stop_desktop_control() -> None:
     """Remove the active-session control grant while Jarvis is stopped."""
     flag = Path.home() / "Library/Application Support/Jarvis/.runtime/desktop-control-enabled"
@@ -80,7 +100,7 @@ def main() -> int:
         recorder = PhraseRecorder()
 
     hotword = os.getenv("JARVIS_HOTWORD", "jarvis").lower()
-    follow_up = False
+    session_active = False
     pending_audio_path = None
     print("Jarvis is ready. Press Control-C to stop.")
     activity.update("listening", "Listening")
@@ -99,11 +119,11 @@ def main() -> int:
                     pending_audio_path = None
                 else:
                     print(f"Listening for ‘{hotword}’…")
-                    activity.update("listening", "Listening")
+                    activity.update("session" if session_active else "listening", "Ready" if session_active else "Listening")
                     audio_path = recorder.listen()
                 try:
                     print("Transcribing…", flush=True)
-                    activity.update("transcribing", "Hearing…")
+                    activity.update("transcribing" if session_active else "listening", "Hearing…" if session_active else "Listening")
                     transcription_started = time.perf_counter()
                     text = assistant.transcribe(audio_path)
                     transcription_seconds = time.perf_counter() - transcription_started
@@ -118,19 +138,22 @@ def main() -> int:
                 text,
                 text_mode=args.text,
                 no_hotword=args.no_hotword,
-                follow_up=follow_up,
+                follow_up=session_active,
                 hotword=hotword,
             ):
                 continue
 
-            # Remove only the first hotword so the model receives a natural request.
-            lowered = text.lower()
-            if hotword in lowered:
-                index = lowered.index(hotword)
-                text = (text[:index] + text[index + len(hotword):]).strip(" ,.!?")
+            wake_detected = hotword in text.lower()
+            if wake_detected:
+                if not session_active:
+                    assistant.reset_session()
+                session_active = True
+                activity.cue("heard")
+                activity.update("session", "Jarvis online", "Conversation active")
+                text = strip_wake_word(text, hotword)
             if not text:
-                assistant.speak("Yes?")
-                follow_up = True
+                assistant.speak("How can I help?")
+                activity.update("session", "Ready", "Listening for your request")
                 continue
 
             if is_logoff_command(text):
@@ -140,8 +163,17 @@ def main() -> int:
                 assistant.speak("Logging off.")
                 break
 
+            if is_satisfied_command(text):
+                assistant.speak("I’m glad I could help.")
+                assistant.reset_session()
+                session_active = False
+                activity.update("listening", "Listening")
+                activity.cue("complete")
+                continue
+
             prompt = f"Local time: {datetime.now().astimezone().isoformat(timespec='minutes')}\nUser: {text}"
-            activity.cue("heard")
+            if not wake_detected:
+                activity.cue("heard")
             if is_complex_request(text):
                 activity.acknowledge()
             print("Thinking…", flush=True)
@@ -165,12 +197,10 @@ def main() -> int:
                 if interrupted:
                     print("Interrupted — listening for your next instruction.")
                     pending_audio_path = interruption_audio
-                    follow_up = True
+                    session_active = True
                     continue
-            follow_up = reply.rstrip().endswith("?")
-            activity.update("needs_input" if follow_up else "listening", "Needs you" if follow_up else "Listening")
-            if not follow_up:
-                activity.cue("complete")
+            activity.update("session", "Your turn", "Conversation active — no wake word needed")
+            activity.cue("complete")
             if args.once:
                 break
         except KeyboardInterrupt:
@@ -180,6 +210,11 @@ def main() -> int:
             activity.update("error", "Problem", str(exc)[:120])
             activity.cue("error")
             print(f"Jarvis error: {exc}", file=sys.stderr)
+            fallback = "I ran into a problem before I could verify the task. I’ve stopped safely instead of pretending it finished."
+            try:
+                assistant.speak(fallback, allow_barge_in=not args.text)
+            except Exception as speech_error:
+                print(f"Jarvis speech error: {speech_error}", file=sys.stderr)
             if args.once:
                 return 1
     return 0

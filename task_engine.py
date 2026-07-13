@@ -166,6 +166,11 @@ class TaskEngine:
         self.record.updated_at = time.time()
         self._save()
 
+    def reset(self) -> None:
+        if self.record:
+            self.finish("satisfied")
+        self.record = None
+
     def _save(self) -> None:
         if not self.record:
             return

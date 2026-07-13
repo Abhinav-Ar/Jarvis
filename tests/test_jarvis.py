@@ -4,7 +4,8 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from jarvis import (
-    is_logoff_command, is_satisfied_command, request_is_active,
+    is_authorized_logoff, is_authorized_session_close, is_logoff_command,
+    is_satisfied_command, request_is_active,
     start_desktop_control, stop_desktop_control, strip_wake_word,
 )
 
@@ -15,11 +16,15 @@ class RequestActivationTests(unittest.TestCase):
         self.assertTrue(is_logoff_command("Log out!"))
         self.assertTrue(is_logoff_command("Hey, log off"))
         self.assertFalse(is_logoff_command("log off Spotify"))
+        self.assertTrue(is_authorized_logoff("Hey Jarvis, log off", "jarvis"))
+        self.assertFalse(is_authorized_logoff("log off", "jarvis"))
 
     def test_baymax_style_satisfaction_ends_session(self):
-        self.assertTrue(is_satisfied_command("I'm satisfied with my care."))
+        self.assertTrue(is_satisfied_command("That'll be all."))
         self.assertTrue(is_satisfied_command("That's all"))
-        self.assertFalse(is_satisfied_command("Thanks for checking"))
+        self.assertFalse(is_satisfied_command("I'm satisfied with my care."))
+        self.assertTrue(is_authorized_session_close("Hey Jarvis, that'll be all", "jarvis"))
+        self.assertFalse(is_authorized_session_close("that'll be all", "jarvis"))
 
     def test_wake_only_and_wake_with_prompt_are_cleaned(self):
         self.assertEqual(strip_wake_word("Hey Jarvis", "jarvis"), "")
@@ -43,6 +48,17 @@ class RequestActivationTests(unittest.TestCase):
                 text_mode=False,
                 no_hotword=False,
                 follow_up=False,
+                hotword="jarvis",
+            )
+        )
+
+    def test_active_conversation_accepts_followups_without_wake_word(self):
+        self.assertTrue(
+            request_is_active(
+                "continue with the next step",
+                text_mode=False,
+                no_hotword=False,
+                follow_up=True,
                 hotword="jarvis",
             )
         )

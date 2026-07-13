@@ -43,12 +43,8 @@ def is_logoff_command(text: str) -> bool:
 
 def is_satisfied_command(text: str) -> bool:
     normalized = " ".join(re.sub(r"[^a-z0-9' ]", " ", text.lower()).split())
-    normalized = normalized.replace("i'm", "i am").replace("that's", "that is")
-    return normalized in {
-        "i am satisfied", "i am satisfied with my care", "that is all",
-        "that will be all", "thanks that is all", "thank you that is all",
-        "dismiss", "dismiss jarvis", "goodbye", "goodbye jarvis", "end session",
-    }
+    normalized = normalized.replace("that'll", "that will").replace("that's", "that is")
+    return normalized in {"that will be all", "that is all"}
 
 
 def strip_wake_word(text: str, hotword: str) -> str:
@@ -59,6 +55,14 @@ def strip_wake_word(text: str, hotword: str) -> str:
     result = (text[:index] + text[index + len(hotword):]).strip(" ,.!?")
     result = re.sub(r"^(hey|okay|ok)\b[\s,]*", "", result, flags=re.IGNORECASE)
     return result.strip(" ,.!?")
+
+
+def is_authorized_logoff(text: str, hotword: str) -> bool:
+    return hotword.lower() in text.lower() and is_logoff_command(strip_wake_word(text, hotword.lower()))
+
+
+def is_authorized_session_close(text: str, hotword: str) -> bool:
+    return hotword.lower() in text.lower() and is_satisfied_command(strip_wake_word(text, hotword.lower()))
 
 
 def stop_desktop_control() -> None:
@@ -147,7 +151,7 @@ def main() -> int:
                 text,
                 text_mode=args.text,
                 no_hotword=args.no_hotword,
-                follow_up=termination,
+                follow_up=session_active,
                 hotword=hotword,
             ):
                 diagnostics.event("wake_phrase_not_found", transcript=text[:300])
@@ -170,14 +174,22 @@ def main() -> int:
                 activity.update("session", "Ready", "Listening for your request")
                 continue
 
-            if is_logoff_command(text):
+            if is_logoff_command(text) and wake_detected:
                 activity.update("stopped", "Stopped")
                 stop_desktop_control()
                 print("Jarvis: Logging off.")
                 assistant.speak("Logging off.")
                 break
 
-            if is_satisfied_command(text):
+            if is_logoff_command(text) and not wake_detected:
+                message = "For a complete shutdown, say: Hey Jarvis, log off."
+                activity.append_chat("user", text)
+                activity.append_chat("assistant", message)
+                assistant.speak(message)
+                activity.update("session", "Your turn", "Conversation active")
+                continue
+
+            if is_satisfied_command(text) and wake_detected:
                 activity.append_chat("user", text)
                 activity.append_chat("assistant", "I’m glad I could help.")
                 assistant.speak("I’m glad I could help.")
@@ -185,6 +197,14 @@ def main() -> int:
                 session_active = False
                 activity.update("listening", "Listening")
                 activity.cue("complete")
+                continue
+
+            if is_satisfied_command(text) and not wake_detected:
+                message = "To close this session, say: Hey Jarvis, that’ll be all."
+                activity.append_chat("user", text)
+                activity.append_chat("assistant", message)
+                assistant.speak(message)
+                activity.update("session", "Your turn", "Conversation active")
                 continue
 
             activity.append_chat("user", text)
@@ -220,7 +240,7 @@ def main() -> int:
                     pending_audio_path = interruption_audio
                     session_active = True
                     continue
-            activity.update("session", "Say Jarvis to continue", "Conversation remains open; wake phrase required")
+            activity.update("session", "Your turn", "Conversation active — wake word not required")
             activity.cue("complete")
             diagnostics.event("request_completed", request_id=request_id)
             if args.once:

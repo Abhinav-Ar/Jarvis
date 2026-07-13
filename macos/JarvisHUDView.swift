@@ -9,6 +9,7 @@ final class JarvisHUDView: NSView {
     var messages: [[String: String]] = []
     var actions: [[String: String]] = []
     var eventCount = 0
+    var backgroundLuminance: CGFloat = 0.25
     private var phase: CGFloat = 0
     private var animationTimer: Timer?
 
@@ -27,7 +28,7 @@ final class JarvisHUDView: NSView {
 
     private var accent: NSColor {
         let colors: [String: NSColor] = [
-            "session": .systemCyan, "speaking": .systemGreen,
+            "session": .systemYellow, "speaking": .systemGreen,
             "transcribing": .systemYellow, "planning": .systemCyan,
             "working": .systemPurple, "verifying": .systemBlue,
             "needs_input": .systemOrange, "error": .systemRed,
@@ -88,9 +89,13 @@ final class JarvisHUDView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         let a = accent
+        let userColor = NSColor(calibratedRed: 0.08, green: 0.55, blue: 1.0, alpha: 1.0)
+        let jarvisColor = NSColor(calibratedRed: 0.10, green: 0.95, blue: 0.62, alpha: 1.0)
         let compact = bounds.width < 1800 || bounds.height < 1000
+        let brightBackground = backgroundLuminance > 0.58
+        let panelOpacity: CGFloat = brightBackground ? 0.93 : 0.76
         let margin: CGFloat = compact ? 22 : 56
-        NSColor.black.withAlphaComponent(0.14).setFill()
+        NSColor.black.withAlphaComponent(brightBackground ? 0.30 : (compact ? 0.07 : 0.14)).setFill()
         bounds.fill()
 
         // Scanning grid across the entire desktop.
@@ -100,7 +105,7 @@ final class JarvisHUDView: NSView {
         while x < bounds.width { grid.move(to: NSPoint(x: x, y: 0)); grid.line(to: NSPoint(x: x, y: bounds.height)); x += spacing }
         var y: CGFloat = phase.truncatingRemainder(dividingBy: spacing)
         while y < bounds.height { grid.move(to: NSPoint(x: 0, y: y)); grid.line(to: NSPoint(x: bounds.width, y: y)); y += spacing }
-        a.withAlphaComponent(0.08).setStroke(); grid.lineWidth = 0.7; grid.stroke()
+        a.withAlphaComponent(compact ? 0.035 : 0.08).setStroke(); grid.lineWidth = 0.7; grid.stroke()
 
         // Futuristic corner brackets.
         let corner = NSBezierPath()
@@ -112,9 +117,9 @@ final class JarvisHUDView: NSView {
         a.withAlphaComponent(0.8).setStroke(); corner.lineWidth = 2; corner.stroke()
 
         // Central command core.
-        let core = NSPoint(x: bounds.width * (compact ? 0.74 : 0.61), y: bounds.height * (compact ? 0.43 : 0.48))
+        let core = NSPoint(x: bounds.width * (compact ? 0.72 : 0.61), y: bounds.height * (compact ? 0.45 : 0.48))
         for index in 0..<3 {
-            let radius = CGFloat((compact ? 48 : 72) + index * (compact ? 15 : 22)) + sin(phase * 2 + CGFloat(index)) * 4
+            let radius = CGFloat((compact ? 34 : 72) + index * (compact ? 11 : 22)) + sin(phase * 2 + CGFloat(index)) * 4
             let ring = NSBezierPath()
             ring.appendArc(withCenter: core, radius: radius, startAngle: phase * 45 + CGFloat(index * 40), endAngle: phase * 45 + CGFloat(230 + index * 25))
             a.withAlphaComponent(0.65 - CGFloat(index) * 0.13).setStroke(); ring.lineWidth = 2; ring.stroke()
@@ -123,19 +128,19 @@ final class JarvisHUDView: NSView {
         a.withAlphaComponent(0.55 + 0.25 * sin(phase * 3)).setFill(); pulse.fill()
 
         // Orbiting telemetry particles.
-        for index in 0..<28 {
+        for index in 0..<(compact ? 12 : 28) {
             let angle = phase * (0.35 + CGFloat(index % 4) * 0.08) + CGFloat(index) * 0.61
-            let radius = CGFloat((compact ? 82 : 125) + (index % 7) * (compact ? 11 : 18))
+            let radius = CGFloat((compact ? 58 : 125) + (index % 7) * (compact ? 8 : 18))
             let point = NSPoint(x: core.x + cos(angle) * radius, y: core.y + sin(angle) * radius * 0.58)
             let dot = NSBezierPath(ovalIn: NSRect(x: point.x - 1.5, y: point.y - 1.5, width: 3, height: 3))
             a.withAlphaComponent(0.22 + CGFloat(index % 4) * 0.12).setFill(); dot.fill()
         }
 
         // Responsive, paged live conversation panel.
-        let chatWidth = compact ? min(bounds.width * 0.70, 980) : min(940, bounds.width * 0.48)
-        let chatHeight = compact ? min(255, bounds.height * 0.31) : min(430, bounds.height * 0.46)
+        let chatWidth = compact ? min(610, bounds.width - margin * 2) : min(940, bounds.width * 0.48)
+        let chatHeight = compact ? min(205, bounds.height * 0.25) : min(430, bounds.height * 0.46)
         let chatPanel = NSRect(x: margin, y: bounds.height - chatHeight - margin, width: chatWidth, height: chatHeight)
-        rounded(chatPanel, radius: 16, fill: NSColor.black.withAlphaComponent(0.76), stroke: a.withAlphaComponent(0.8))
+        rounded(chatPanel, radius: 16, fill: NSColor.black.withAlphaComponent(panelOpacity), stroke: a.withAlphaComponent(brightBackground ? 1.0 : 0.8))
         text("JARVIS // LIVE CONVERSATION", at: NSPoint(x: chatPanel.minX + 22, y: chatPanel.maxY - 31), size: 12, color: a, weight: .bold)
         text(label.uppercased(), at: NSPoint(x: chatPanel.maxX - 145, y: chatPanel.maxY - 31), size: 11, color: a, weight: .bold)
         let visibleMessages = Array(messages.suffix(compact ? 2 : 4))
@@ -147,8 +152,9 @@ final class JarvisHUDView: NSView {
             let bubbleX = isUser ? chatPanel.minX + 105 : chatPanel.minX + 20
             let bubbleWidth = chatPanel.width - 125
             let bubble = NSRect(x: bubbleX, y: cursorY - 38, width: bubbleWidth, height: 34)
-            rounded(bubble, radius: 10, fill: (isUser ? NSColor.systemBlue : a).withAlphaComponent(0.18), stroke: (isUser ? NSColor.systemBlue : a).withAlphaComponent(0.48))
-            text(isUser ? "YOU" : "JARVIS", at: NSPoint(x: isUser ? chatPanel.minX + 60 : chatPanel.maxX - 79, y: bubble.minY + 11), size: 8, color: isUser ? .systemBlue : a, weight: .bold)
+            let speakerColor = isUser ? userColor : jarvisColor
+            rounded(bubble, radius: 10, fill: speakerColor.withAlphaComponent(0.18), stroke: speakerColor.withAlphaComponent(0.58))
+            text(isUser ? "YOU" : "JARVIS", at: NSPoint(x: isUser ? chatPanel.minX + 60 : chatPanel.maxX - 79, y: bubble.minY + 11), size: 8, color: speakerColor, weight: .bold)
             let snippet = cleanMessage(message["text"] ?? "")
             textBlock(String(snippet.prefix(max(60, Int(bubbleWidth / 6)))), in: NSRect(x: bubble.minX + 10, y: bubble.minY + 7, width: bubble.width - 20, height: 20), size: 10, color: NSColor.white.withAlphaComponent(0.72))
             cursorY -= 42
@@ -157,13 +163,14 @@ final class JarvisHUDView: NSView {
             let role = latest["role"] ?? "assistant"
             let isUser = role == "user"
             let bubble = NSRect(x: chatPanel.minX + 20, y: chatPanel.minY + 18, width: chatPanel.width - 40, height: max(80, cursorY - chatPanel.minY - 24))
-            rounded(bubble, radius: 12, fill: (isUser ? NSColor.systemBlue : a).withAlphaComponent(0.22), stroke: (isUser ? NSColor.systemBlue : a).withAlphaComponent(0.75))
-            text(isUser ? "YOU // LATEST" : "JARVIS // LATEST", at: NSPoint(x: bubble.minX + 13, y: bubble.maxY - 24), size: 9, color: isUser ? .systemBlue : a, weight: .bold)
+            let speakerColor = isUser ? userColor : jarvisColor
+            rounded(bubble, radius: 12, fill: speakerColor.withAlphaComponent(0.20), stroke: speakerColor.withAlphaComponent(0.78))
+            text(isUser ? "YOU // LATEST" : "JARVIS // LATEST", at: NSPoint(x: bubble.minX + 13, y: bubble.maxY - 24), size: 9, color: speakerColor, weight: .bold)
             let textRect = NSRect(x: bubble.minX + 13, y: bubble.minY + 12, width: bubble.width - 26, height: bubble.height - 43)
             let page = messagePage(latest["text"] ?? "", width: textRect.width, height: textRect.height, fontSize: compact ? 10 : 12)
             textBlock(page.0, in: textRect, size: compact ? 10 : 12, color: .white)
             if page.2 > 1 {
-                text("AUTO-SCROLL  (page.1)/(page.2)", at: NSPoint(x: bubble.maxX - 125, y: bubble.maxY - 24), size: 8, color: a, weight: .bold)
+                text("AUTO-SCROLL  \(page.1)/\(page.2)", at: NSPoint(x: bubble.maxX - 125, y: bubble.maxY - 24), size: 8, color: speakerColor, weight: .bold)
             }
         } else {
             let waiting = cleanGoal(goal.isEmpty ? "Say what you need. I’m listening." : goal)
@@ -171,14 +178,14 @@ final class JarvisHUDView: NSView {
         }
 
         // Detailed action telemetry, responsive to each display size.
-        let consoleWidth = compact ? bounds.width * 0.43 : min(540, bounds.width * 0.30)
-        let consoleHeight = compact ? min(185, bounds.height * 0.22) : min(390, bounds.height * 0.40)
+        let consoleWidth = compact ? min(350, bounds.width * 0.30) : min(540, bounds.width * 0.30)
+        let consoleHeight = compact ? min(140, bounds.height * 0.17) : min(390, bounds.height * 0.40)
         let console = NSRect(x: margin, y: margin + 22, width: consoleWidth, height: consoleHeight)
-        rounded(console, radius: 14, fill: NSColor.black.withAlphaComponent(0.76), stroke: a.withAlphaComponent(0.65))
+        rounded(console, radius: 14, fill: NSColor.black.withAlphaComponent(panelOpacity), stroke: a.withAlphaComponent(brightBackground ? 0.95 : 0.65))
         text("ACTION TELEMETRY // \(actions.count) EVENTS", at: NSPoint(x: console.minX + 18, y: console.maxY - 28), size: 10, color: a, weight: .bold)
-        let actionRows = Array(actions.suffix(compact ? 3 : 6))
+        let actionRows = Array(actions.suffix(compact ? 2 : 6))
         for (index, action) in actionRows.enumerated() {
-            let rowHeight: CGFloat = compact ? 39 : 49
+            let rowHeight: CGFloat = compact ? 36 : 49
             let row = NSRect(x: console.minX + 14, y: console.maxY - 50 - CGFloat(index + 1) * rowHeight, width: console.width - 28, height: rowHeight - 6)
             let status = action["status"] ?? "running"
             let color: NSColor = status == "complete" ? .systemGreen : status == "failed" ? .systemRed : a
@@ -192,21 +199,21 @@ final class JarvisHUDView: NSView {
         }
 
         // Dependency/step stack on the right.
-        let stackWidth = compact ? bounds.width - console.maxX - margin * 2 : min(470, bounds.width * 0.27)
+        let stackWidth = compact ? min(310, bounds.width * 0.25) : min(470, bounds.width * 0.27)
         let stackX = bounds.width - stackWidth - margin
         let stackTop = console.maxY - 8
         text("EXECUTION PATH", at: NSPoint(x: stackX, y: stackTop), size: 10, color: a, weight: .bold)
-        for (index, step) in steps.prefix(compact ? 4 : 6).enumerated() {
+        for (index, step) in steps.prefix(compact ? 3 : 6).enumerated() {
             let rect = NSRect(x: stackX, y: stackTop - 43 - CGFloat(index * 40), width: stackWidth, height: 31)
             let active = index == min(eventCount, max(0, steps.count - 1))
-            rounded(rect, radius: 8, fill: (active ? a : NSColor.black).withAlphaComponent(active ? 0.28 : 0.65), stroke: a.withAlphaComponent(active ? 0.9 : 0.28))
+            rounded(rect, radius: 8, fill: (active ? a : NSColor.black).withAlphaComponent(active ? 0.32 : (brightBackground ? 0.88 : 0.65)), stroke: a.withAlphaComponent(active ? 0.95 : (brightBackground ? 0.65 : 0.28)))
             textBlock("\(index < eventCount ? "✓" : active ? "▶" : "○")  \(step)", in: NSRect(x: rect.minX + 10, y: rect.minY + 8, width: rect.width - 20, height: 17), size: 9, color: active ? .white : NSColor.white.withAlphaComponent(0.65))
         }
 
         // Exaggerated active-action beacon.
         if let activeAction = actions.last, activeAction["status"] == "running" {
-            let bannerWidth = min(compact ? 390 : 700, bounds.width * 0.46)
-            let banner = NSRect(x: core.x - bannerWidth / 2, y: core.y - 110, width: bannerWidth, height: 58)
+            let bannerWidth = min(compact ? 310 : 700, bounds.width * 0.46)
+            let banner = NSRect(x: core.x - bannerWidth / 2, y: core.y - (compact ? 82 : 110), width: bannerWidth, height: compact ? 46 : 58)
             for ring in 0..<3 {
                 let expansion = CGFloat(ring * 9) + 4 * sin(phase * 3 + CGFloat(ring))
                 let glow = NSBezierPath(roundedRect: banner.insetBy(dx: -expansion, dy: -expansion * 0.5), xRadius: 12, yRadius: 12)
@@ -224,14 +231,14 @@ final class JarvisHUDView: NSView {
 
         // Animated signal waveform.
         let wave = NSBezierPath()
-        let waveStart = bounds.width * 0.40
-        let waveEnd = bounds.width - 70
+        let waveStart = compact ? bounds.width * 0.58 : bounds.width * 0.40
+        let waveEnd = bounds.width - (compact ? 30 : 70)
         var wx = waveStart
         while wx <= waveEnd {
-            let amplitude = 8 + 7 * sin(phase * 1.3)
-            let wy = 48 + sin((wx - waveStart) * 0.045 + phase * 5) * amplitude * sin((wx - waveStart) * 0.012)
+            let amplitude = compact ? 4 : 8 + 7 * sin(phase * 1.3)
+            let wy = (compact ? 24 : 48) + sin((wx - waveStart) * 0.045 + phase * 5) * amplitude * sin((wx - waveStart) * 0.012)
             if wx == waveStart { wave.move(to: NSPoint(x: wx, y: wy)) } else { wave.line(to: NSPoint(x: wx, y: wy)) }
-            wx += 4
+            wx += compact ? 6 : 4
         }
         a.withAlphaComponent(0.55).setStroke(); wave.lineWidth = 1.4; wave.stroke()
     }

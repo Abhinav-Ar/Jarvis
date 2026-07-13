@@ -1,8 +1,10 @@
 import AppKit
+import CoreGraphics
 import Foundation
+import ScreenCaptureKit
 import UserNotifications
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private let service = "gui/\(getuid())/com.jarvis.voice"
     private let appDirectory = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/Jarvis")
@@ -14,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var previewFlag = appDirectory.appendingPathComponent(".runtime/hud-preview")
     private lazy var chatFile = appDirectory.appendingPathComponent(".runtime/chat.json")
     private lazy var actionsFile = appDirectory.appendingPathComponent(".runtime/actions.json")
+    private lazy var contrastFile = appDirectory.appendingPathComponent(".runtime/contrast-state.json")
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
     private var detailMenuItem: NSMenuItem!
@@ -22,6 +25,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hud: NSWindow?
     private var hudView: JarvisHUDView?
     private var previousState = ""
+    private var lastLuminanceCheck = Date.distantPast
+    private var sampledLuminance: CGFloat = 0.25
+    private var luminanceSampling = false
+    private var recordedMissingScreenPermission = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -108,6 +115,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main ?? NSScreen.screens.first!
     }
 
+    private func requestLuminanceSample() {
+        // ScreenCaptureKit can display a privacy prompt when queried without a
+        // recognized TCC grant. The HUD must never create a repeating prompt in
+        // the background; use the safest high-contrast appearance instead.
+        guard CGPreflightScreenCaptureAccess() else {
+            sampledLuminance = 1.0
+            hudView?.backgroundLuminance = sampledLuminance
+            if !recordedMissingScreenPermission,
+               let data = try? JSONSerialization.data(withJSONObject: [
+                   "luminance": sampledLuminance,
+                   "bright_ratio": 1.0,
+                   "bright_mode": true,
+                   "capture_permission": "not_granted",
+                   "timestamp": Date().timeIntervalSince1970,
+               ]) {
+                recordedMissingScreenPermission = true
+                try? data.write(to: contrastFile, options: .atomic)
+            }
+            return
+        }
+        recordedMissingScreenPermission = false
+        guard !luminanceSampling, Date().timeIntervalSince(lastLuminanceCheck) > 1.5,
+              let application = NSWorkspace.shared.frontmostApplication else { return }
+        lastLuminanceCheck = Date()
+        luminanceSampling = true
+        let pid = application.processIdentifier
+        Task { [weak self] in
+            var luminance: CGFloat?
+            var brightRatio: CGFloat = 0
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                let candidates = content.windows.filter { $0.owningApplication?.processID == pid && $0.isOnScreen }
+                if let window = candidates.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) {
+                    let filter = SCContentFilter(desktopIndependentWindow: window)
+                    let configuration = SCStreamConfiguration()
+                    configuration.width = 24
+                    configuration.height = 24
+                    configuration.showsCursor = false
+                    let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+                    let side = 24
+                    var pixels = [UInt8](repeating: 0, count: side * side * 4)
+                    let colorSpace = CGColorSpaceCreateDeviceRGB()
+                    pixels.withUnsafeMutableBytes { buffer in
+                        if let context = CGContext(data: buffer.baseAddress, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4, space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+                            context.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
+                        }
+                    }
+                    var total: CGFloat = 0
+                    var brightPixels = 0
+                    for index in stride(from: 0, to: pixels.count, by: 4) {
+                        let pixelLuminance = (0.2126 * CGFloat(pixels[index]) + 0.7152 * CGFloat(pixels[index + 1]) + 0.0722 * CGFloat(pixels[index + 2])) / 255.0
+                        total += pixelLuminance
+                        if pixelLuminance > 0.72 { brightPixels += 1 }
+                    }
+                    let average = total / CGFloat(side * side)
+                    brightRatio = CGFloat(brightPixels) / CGFloat(side * side)
+                    // A browser can have dark chrome surrounding a bright page. Weight the
+                    // amount of bright content so the HUD still switches to high contrast.
+                    luminance = max(average, min(1.0, brightRatio * 2.5))
+                }
+            } catch {}
+            DispatchQueue.main.async {
+                if let luminance { self?.sampledLuminance = luminance }
+                self?.luminanceSampling = false
+                self?.hudView?.backgroundLuminance = self?.sampledLuminance ?? 0.25
+                self?.hudView?.needsDisplay = true
+                if let self,
+                   let data = try? JSONSerialization.data(withJSONObject: [
+                       "luminance": self.sampledLuminance,
+                       "bright_ratio": brightRatio,
+                       "bright_mode": self.sampledLuminance > 0.58,
+                       "timestamp": Date().timeIntervalSince1970,
+                   ]) {
+                    try? data.write(to: self.contrastFile, options: .atomic)
+                }
+            }
+        }
+    }
+
     @objc private func refreshStatus() {
         let running = isRunning()
         if !running {
@@ -133,7 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             detail = "Previewing the Jarvis command interface"
         }
         let colors: [String: NSColor] = [
-            "listening": .systemCyan, "session": .systemCyan, "transcribing": .systemYellow,
+            "listening": .systemCyan, "session": .systemYellow, "transcribing": .systemYellow,
             "planning": .systemBlue, "working": .systemPurple,
             "verifying": .systemIndigo, "speaking": .systemGreen,
             "needs_input": .systemOrange, "error": .systemRed, "stopped": .systemRed,
@@ -232,6 +318,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hudView?.eventCount = max(events, actions.count)
         hudView?.messages = messages
         hudView?.actions = actions
+        hudView?.backgroundLuminance = sampledLuminance
+        requestLuminanceSample()
         hudView?.needsDisplay = true
         let frame = targetScreen().visibleFrame
         hud?.setFrame(frame, display: true)

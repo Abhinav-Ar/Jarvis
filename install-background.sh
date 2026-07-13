@@ -36,6 +36,7 @@ mkdir -p "$MENU_APP/Contents/MacOS" "$APP_DIR/.swift-cache"
 /usr/bin/swiftc \
   -module-cache-path "$APP_DIR/.swift-cache" \
   -framework UserNotifications \
+  -framework ScreenCaptureKit \
   "$PROJECT_DIR/macos/JarvisHUDView.swift" \
   "$PROJECT_DIR/macos/JarvisMenu.swift" \
   -o "$MENU_APP/Contents/MacOS/JarvisMenu"

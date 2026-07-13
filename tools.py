@@ -285,11 +285,11 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "name": "desktop_inspect",
-        "description": "Capture and visually inspect the current Mac screen for an explicit user request. This is read-only and redacts sensitive categories. Use before any coordinate action.",
+        "description": "Capture and visually inspect the Mac for an explicit request. When interacting with a named app, application MUST be its exact name; Jarvis brings it forward, captures only that app's display, and locks clicks to that display. Use an empty application only for read-only inspection across all displays.",
         "parameters": {
             "type": "object",
-            "properties": {"question": {"type": "string"}},
-            "required": ["question"],
+            "properties": {"question": {"type": "string"}, "application": {"type": "string"}},
+            "required": ["question", "application"],
             "additionalProperties": False,
         },
         "strict": True,

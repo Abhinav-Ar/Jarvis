@@ -22,8 +22,8 @@ if action != "screenshot" {
 }
 
 switch action {
-case "screenshot":
-    guard args.count == 3 else { fail("screenshot requires an output path") }
+case "screenshot", "screenshot-app":
+    guard args.count == 3 || (action == "screenshot-app" && args.count == 4) else { fail("screenshot requires an output path") }
     Task {
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(
@@ -35,8 +35,25 @@ case "screenshot":
                 guard let owner = window.owningApplication else { return false }
                 return owner.bundleIdentifier == "com.jarvis.menu" || owner.applicationName == "JarvisMenu"
             }
+            var selectedDisplays = content.displays
+            if action == "screenshot-app" {
+                let requested = args[3]
+                let windows = content.windows.filter { window in
+                    guard let owner = window.owningApplication else { return false }
+                    return owner.applicationName.localizedCaseInsensitiveContains(requested) && window.isOnScreen
+                }
+                if let targetWindow = windows.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }),
+                   let targetDisplay = content.displays.max(by: { first, second in
+                       first.frame.intersection(targetWindow.frame).width * first.frame.intersection(targetWindow.frame).height <
+                       second.frame.intersection(targetWindow.frame).width * second.frame.intersection(targetWindow.frame).height
+                   }) {
+                    selectedDisplays = [targetDisplay]
+                } else {
+                    fail("No visible window found for \(requested)")
+                }
+            }
             var captures: [(SCDisplay, CGImage)] = []
-            for display in content.displays {
+            for display in selectedDisplays {
                 let filter = SCContentFilter(display: display, excludingWindows: overlayWindows)
                 let configuration = SCStreamConfiguration()
                 configuration.width = display.width

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import subprocess
 import tempfile
@@ -11,10 +12,12 @@ from pathlib import Path
 
 from openai import OpenAI
 import diagnostics
+import mac_tools
 
 
 RUNTIME_DIR = Path.home() / "Library" / "Application Support" / "Jarvis" / ".runtime"
 CONTROL_FLAG = RUNTIME_DIR / "desktop-control-enabled"
+TARGET_FILE = RUNTIME_DIR / "last-desktop-target.json"
 HELPER = (
     Path.home()
     / "Applications"
@@ -25,17 +28,29 @@ HELPER = (
 )
 
 
-def inspect_screen(question: str) -> dict:
+def inspect_screen(question: str, application: str = "") -> dict:
     path = Path(tempfile.gettempdir()) / "jarvis-screen.png"
     started = time.perf_counter()
     try:
         if not HELPER.exists():
             return {"ok": False, "error": "The desktop helper is not installed."}
+        helper_arguments = [str(HELPER), "screenshot", str(path)]
+        if application.strip():
+            activation = mac_tools.open_application(application.strip())
+            if not activation.get("frontmost"):
+                return {"ok": False, "error": f"{application} could not be brought to the foreground."}
+            helper_arguments = [str(HELPER), "screenshot-app", str(path), application.strip()]
         capture = subprocess.run(
-            [str(HELPER), "screenshot", str(path)], check=True,
+            helper_arguments, check=True,
             capture_output=True, text=True, timeout=30,
         )
         display_mapping = capture.stdout.strip()
+        mapping = json.loads(display_mapping)
+        if application.strip() and mapping.get("displays"):
+            target = {"application": application.strip(), "display": mapping["displays"][0]}
+            TARGET_FILE.write_text(json.dumps(target), encoding="utf-8")
+        else:
+            TARGET_FILE.unlink(missing_ok=True)
         diagnostics.event(
             "desktop_capture_completed",
             duration_ms=round((time.perf_counter() - started) * 1000),
@@ -59,6 +74,7 @@ def inspect_screen(question: str) -> dict:
                                 "for relevant controls by applying the supplied montage mapping. "
                                 "Never transcribe passwords, authentication codes, payment details, "
                                 "or private keys. Display mapping: " + display_mapping +
+                                ". Target application: " + (application or "all displays") +
                                 ". Request: " + question
                             ),
                         },
@@ -97,6 +113,23 @@ def perform_action(
         }
     if not HELPER.exists():
         return {"ok": False, "error": "The desktop helper is not installed."}
+    if action == "click" and not TARGET_FILE.exists():
+        return {"ok": False, "error": "Inspect a named target application before clicking."}
+    if action == "click" and TARGET_FILE.exists():
+        try:
+            target = json.loads(TARGET_FILE.read_text(encoding="utf-8"))
+            display = target["display"]
+            inside = (
+                float(display["global_x"]) <= x <= float(display["global_x"]) + float(display["global_width"])
+                and float(display["global_y"]) <= y <= float(display["global_y"]) + float(display["global_height"])
+            )
+            if not inside:
+                return {
+                    "ok": False,
+                    "error": f"Rejected click outside the display locked to {target['application']}.",
+                }
+        except (OSError, ValueError, KeyError, TypeError):
+            return {"ok": False, "error": "Desktop target lock is invalid; inspect the target application again."}
     if action in {"type", "key"} and not confirmed:
         return {
             "ok": False,

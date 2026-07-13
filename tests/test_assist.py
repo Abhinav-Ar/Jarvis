@@ -19,6 +19,17 @@ class FakeResponses:
 
 
 class AssistantTests(unittest.TestCase):
+    def test_speech_text_removes_markdown_links_and_urls(self):
+        spoken = JarvisAssistant.speech_text(
+            "Latest: [AP News](https://apnews.com/story) and https://example.com/details"
+        )
+        self.assertEqual(spoken, "Latest: AP News and")
+
+    @patch.dict(os.environ, {"OPENAI_MODEL": "gpt-5-mini"})
+    def test_older_mini_model_uses_compatible_reasoning_effort(self):
+        assistant = JarvisAssistant()
+        self.assertEqual(assistant.reasoning_effort, "minimal")
+
     def test_plain_response_is_returned_and_remembered(self):
         answer = SimpleNamespace(id="r1", output=[], output_text="Hello, Sir.")
         assistant = JarvisAssistant()

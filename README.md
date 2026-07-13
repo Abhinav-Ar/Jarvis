@@ -22,6 +22,7 @@ tools when requested, and speaks the result through the Mac's audio output.
 - Report battery, power, CPU, memory, disk, and macOS status
 - Show local notifications
 - Search the Spotlight file index and return matching paths
+- List or run Apple Shortcuts, including shortcuts for Home devices and scenes
 
 ### Apple apps
 
@@ -33,7 +34,7 @@ tools when requested, and speaks the result through the Mac's audio output.
 
 ### Optional services
 
-- Spotify playback, navigation, and current-track information
+- Spotify playback, navigation, current-track information, and private discovery playlists built locally from your taste
 - Todoist task creation with natural-language due dates
 - Home Assistant lights, switches, scenes, scripts, media players, and climate power
 
@@ -140,6 +141,12 @@ Set `JARVIS_INPUT_DEVICE` in `.env` if the default microphone is wrong. Raise
 `JARVIS_ENERGY_THRESHOLD` if noise activates recording; lower it if your voice
 is not detected.
 
+While speaking, Jarvis measures speaker echo and uses an adaptive barge-in
+threshold. If interruption remains difficult, lower `JARVIS_BARGE_IN_THRESHOLD`.
+If Jarvis interrupts itself, raise `JARVIS_BARGE_IN_THRESHOLD_RATIO`. When an
+interruption is detected, the terminal prints the measured voice level and active
+threshold to make calibration concrete.
+
 ## Example requests
 
 - “Jarvis, research today's biggest AI announcement.”
@@ -150,8 +157,10 @@ is not detected.
 - “Jarvis, draft an email to me@example.com about Friday's meeting.”
 - “Jarvis, find my tax return PDF.”
 - “Jarvis, play Spotify and tell me what song is on.”
+- “Jarvis, make a private Spotify discovery playlist based on my taste.”
 - “Jarvis, add submit expenses to Todoist, due Friday.”
 - “Jarvis, turn off light.living_room through Home Assistant.”
+- “Jarvis, run my Good Night shortcut.”
 
 ## Privacy
 
@@ -160,6 +169,13 @@ OpenAI processes transcripts and responses. Weather queries go to Open-Meteo;
 configured optional actions go to their respective services. Clipboard, Contacts,
 file search, and Apple app data are accessed only when the corresponding tool is
 explicitly requested. Conversation memory lasts until Jarvis exits.
+
+Spotify discovery processes listening metadata locally and sends only a success
+summary to the language model. It paginates large libraries, inspects playlist
+items Spotify permits, handles sparse history, excludes duplicates and non-track
+items, and retries rate limits and temporary failures. “Unheard” means absent
+from the history and accessible playlists Spotify exposes; Spotify does not
+provide a complete lifetime listening ledger.
 
 ## Project layout
 

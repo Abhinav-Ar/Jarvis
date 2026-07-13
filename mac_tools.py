@@ -156,3 +156,13 @@ end run"""
 def find_files(query: str) -> dict:
     output = _run(["/usr/bin/mdfind", query])
     return {"ok": True, "paths": output.splitlines()[:20]}
+
+
+def shortcuts(action: str, name: str = "") -> dict:
+    if action == "list":
+        names = _run(["/usr/bin/shortcuts", "list"]).splitlines()
+        return {"ok": True, "shortcuts": names[:100]}
+    if not name.strip():
+        return {"ok": False, "error": "A shortcut name is required."}
+    _run(["/usr/bin/shortcuts", "run", name])
+    return {"ok": True, "shortcut": name}

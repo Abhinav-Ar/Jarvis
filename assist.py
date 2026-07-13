@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-import tempfile
+import re
+import time
 from pathlib import Path
 
 from openai import OpenAI
+import sounddevice as sd
 
 import tools
 
 
 SYSTEM_PROMPT = """You are Jarvis, a concise, warm, capable voice assistant.
-Address the user naturally. Keep spoken answers short unless detail is requested.
+Address the user naturally. Because answers are spoken aloud, default to at most
+45 words and three compact points unless detail is explicitly requested. Do not
+include raw URLs in prose; citations may remain attached to displayed text.
 Use tools when the user asks for current research, weather, searches, Mac actions,
 Apple apps, Spotify, Todoist, or Home Assistant. Only perform actions that the
 user explicitly requested; never infer a side effect from casual conversation.
@@ -28,6 +31,10 @@ class JarvisAssistant:
     def __init__(self) -> None:
         self.client = OpenAI()
         self.model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
+        self.reasoning_effort = os.getenv(
+            "OPENAI_REASONING_EFFORT",
+            "none" if self.model.startswith("gpt-5.4") else "minimal",
+        )
         self.voice = os.getenv("OPENAI_VOICE", "echo")
         self.tts_model = os.getenv("OPENAI_TTS_MODEL", "tts-1")
         self.previous_response_id: str | None = None
@@ -35,6 +42,7 @@ class JarvisAssistant:
     def ask(self, question: str) -> str:
         response = self.client.responses.create(
             model=self.model,
+            reasoning={"effort": self.reasoning_effort},
             instructions=SYSTEM_PROMPT,
             input=question,
             tools=tools.TOOL_DEFINITIONS,
@@ -65,6 +73,7 @@ class JarvisAssistant:
 
             response = self.client.responses.create(
                 model=self.model,
+                reasoning={"effort": self.reasoning_effort},
                 instructions=SYSTEM_PROMPT,
                 input=outputs,
                 tools=tools.TOOL_DEFINITIONS,
@@ -82,20 +91,63 @@ class JarvisAssistant:
             )
         return result.text.strip()
 
-    def speak(self, text: str) -> None:
+    @staticmethod
+    def speech_text(text: str) -> str:
+        """Turn display-oriented Markdown into concise, speakable text."""
+        text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+        text = re.sub(r"https?://\S+", "", text)
+        text = re.sub(r"[*_`#]", "", text)
+        text = re.sub(r"\n\s*[-•]\s*", ". ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        limit = int(os.getenv("JARVIS_MAX_SPOKEN_CHARS", "500"))
+        if len(text) > limit:
+            boundary = text.rfind(". ", 0, limit)
+            text = text[: boundary + 1 if boundary > limit // 2 else limit].rstrip()
+            text += " I’ve shown the remaining details on screen."
+        return text
+
+    def speak(self, text: str, allow_barge_in: bool = False) -> tuple[float, bool, Path | None]:
         if not text or os.getenv("JARVIS_MUTE", "0") == "1":
-            return
-        path = Path(tempfile.gettempdir()) / "jarvis-response.mp3"
-        with self.client.audio.speech.with_streaming_response.create(
-            model=self.tts_model,
-            voice=self.voice,
-            input=text,
-        ) as response:
-            response.stream_to_file(path)
+            return 0.0, False, None
+        text = self.speech_text(text)
+        request_started = time.perf_counter()
+        first_audio_delay = 0.0
+        interrupted = False
+        interruption_audio = None
+        monitor_context = None
+        if allow_barge_in:
+            from audio import BargeInMonitor
+
+            monitor_context = BargeInMonitor()
+            monitor = monitor_context.__enter__()
+        else:
+            monitor = None
         try:
-            subprocess.run(["/usr/bin/afplay", str(path)], check=True)
+            with self.client.audio.speech.with_streaming_response.create(
+                model=self.tts_model,
+                voice=self.voice,
+                input=text,
+                response_format="pcm",
+            ) as response:
+                pending = b""
+                with sd.RawOutputStream(samplerate=24000, channels=1, dtype="int16") as output:
+                    for chunk in response.iter_bytes(chunk_size=4096):
+                        if monitor is not None and monitor.triggered.is_set():
+                            interrupted = True
+                            break
+                        if not first_audio_delay:
+                            first_audio_delay = time.perf_counter() - request_started
+                        pending += chunk
+                        complete = len(pending) - (len(pending) % 2)
+                        if complete:
+                            output.write(pending[:complete])
+                            pending = pending[complete:]
+            if interrupted and monitor is not None:
+                interruption_audio = monitor.capture_phrase()
         finally:
-            path.unlink(missing_ok=True)
+            if monitor_context is not None:
+                monitor_context.__exit__(None, None, None)
+        return first_audio_delay, interrupted, interruption_audio
 
 
 _default: JarvisAssistant | None = None

@@ -44,16 +44,41 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "name": "spotify_control",
-        "description": "Control Spotify or report the currently playing track.",
+        "description": "Control Spotify, play a requested song, or report the current track. For play, query is the song or empty to resume; otherwise query is empty. Never use this tool for playlist creation or playlist-name playback.",
         "parameters": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
                     "enum": ["play", "pause", "next", "previous", "current"],
-                }
+                },
+                "query": {"type": "string"},
             },
-            "required": ["action"],
+            "required": ["action", "query"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "spotify_play_playlist",
+        "description": "Play one of the user's existing Spotify playlists. Set name to the requested playlist name, or empty only when the user asks for any/random existing playlist. This never creates a playlist.",
+        "parameters": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "spotify_create_discovery_playlist",
+        "description": "Create a new private Spotify discovery playlist using recent listening taste. Use only when the user explicitly asks to create or make a new discovery/recommendation playlist. Never use for requests to play an existing playlist.",
+        "parameters": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
             "additionalProperties": False,
         },
         "strict": True,
@@ -225,6 +250,21 @@ TOOL_DEFINITIONS = [
         },
         "strict": True,
     },
+    {
+        "type": "function",
+        "name": "apple_shortcuts",
+        "description": "List or run a named Apple Shortcut, including shortcuts that control Apple Home devices and scenes. Only run a shortcut explicitly requested by the user.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["list", "run"]},
+                "name": {"type": "string"},
+            },
+            "required": ["action", "name"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
 ]
 
 
@@ -271,11 +311,23 @@ def open_search(query: str, kind: str) -> dict:
     return {"ok": opened, "query": query, "kind": kind}
 
 
-def spotify_control(action: str) -> dict:
+def spotify_control(action: str, query: str = "") -> dict:
     # Import lazily so Spotify credentials are optional for every other feature.
     import spot
 
-    return spot.control(action)
+    return spot.control(action, query)
+
+
+def spotify_play_playlist(name: str = "") -> dict:
+    import spot
+
+    return spot.play_playlist(name)
+
+
+def spotify_create_discovery_playlist(name: str = "") -> dict:
+    import spot
+
+    return spot.create_discovery_playlist(name or "Jarvis Discoveries")
 
 
 def execute(name: str, arguments: dict) -> dict:
@@ -283,6 +335,8 @@ def execute(name: str, arguments: dict) -> dict:
         "get_weather": get_weather,
         "open_search": open_search,
         "spotify_control": spotify_control,
+        "spotify_play_playlist": spotify_play_playlist,
+        "spotify_create_discovery_playlist": spotify_create_discovery_playlist,
         "open_application": mac_tools.open_application,
         "set_system_volume": mac_tools.set_system_volume,
         "clipboard": mac_tools.clipboard,
@@ -296,6 +350,7 @@ def execute(name: str, arguments: dict) -> dict:
         "create_email_draft": mac_tools.create_email_draft,
         "find_contact": mac_tools.find_contact,
         "find_files": mac_tools.find_files,
+        "apple_shortcuts": mac_tools.shortcuts,
     }
     if name not in handlers:
         return {"ok": False, "error": f"Unknown tool: {name}"}

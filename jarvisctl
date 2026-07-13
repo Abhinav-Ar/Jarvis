@@ -51,14 +51,20 @@ case "$COMMAND" in
   logs)
     LOG_FILE="$APP_DIR/.runtime/jarvis.log"
     ERROR_FILE="$APP_DIR/.runtime/jarvis-error.log"
+    EVENT_FILE="$APP_DIR/.runtime/events.jsonl"
     if [[ ! -f "$LOG_FILE" || ! -f "$ERROR_FILE" ]]; then
       echo "Jarvis log files do not exist yet. Start Jarvis and try again."
       exit 1
     fi
     if [[ "${2:-}" == "--follow" ]]; then
-      tail -n 100 -f "$LOG_FILE" "$ERROR_FILE"
+      touch "$EVENT_FILE"
+      tail -n 100 -f "$LOG_FILE" "$ERROR_FILE" "$EVENT_FILE"
     else
       tail -n 100 "$LOG_FILE" "$ERROR_FILE"
+      if [[ -f "$EVENT_FILE" ]]; then
+        echo "Structured diagnostic events:"
+        tail -n 100 "$EVENT_FILE"
+      fi
       echo "Use './jarvisctl logs --follow' for a continuous live view."
     fi
     ;;

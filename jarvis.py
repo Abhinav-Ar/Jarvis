@@ -7,6 +7,8 @@ import os
 import re
 import sys
 import time
+import traceback
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -14,6 +16,7 @@ from dotenv import load_dotenv
 
 import activity
 import fast_commands
+import diagnostics
 
 
 def arguments() -> argparse.Namespace:
@@ -105,6 +108,7 @@ def main() -> int:
     pending_audio_path = None
     print("Jarvis is ready. Press Control-C to stop.")
     activity.update("listening", "Listening")
+    diagnostics.event("service_started", mode="text" if args.text else "voice", hotword=os.getenv("JARVIS_HOTWORD", "jarvis"))
 
     while True:
         try:
@@ -121,15 +125,16 @@ def main() -> int:
                 else:
                     print(f"Listening for ‘{hotword}’…")
                     activity.update("session" if session_active else "listening", "Ready" if session_active else "Listening")
-                    audio_path = recorder.listen(
-                        on_speech_start=lambda: activity.update("transcribing", "Hearing…", "Capturing your voice")
-                    )
+                    audio_path = recorder.listen(on_speech_start=lambda: diagnostics.event("speech_started"))
                 try:
                     print("Transcribing…", flush=True)
-                    activity.update("transcribing", "Hearing…", "Turning speech into text")
                     transcription_started = time.perf_counter()
                     text = assistant.transcribe(audio_path)
                     transcription_seconds = time.perf_counter() - transcription_started
+                    diagnostics.event(
+                        "transcription_completed", duration_ms=round(transcription_seconds * 1000),
+                        transcript=text if os.getenv("JARVIS_LOG_TRANSCRIPTS", "1") == "1" else "[disabled]",
+                    )
                 finally:
                     audio_path.unlink(missing_ok=True)
                 if text:
@@ -137,23 +142,28 @@ def main() -> int:
 
             if not text:
                 continue
+            termination = session_active and is_satisfied_command(text)
             if not request_is_active(
                 text,
                 text_mode=args.text,
                 no_hotword=args.no_hotword,
-                follow_up=session_active,
+                follow_up=termination,
                 hotword=hotword,
             ):
+                diagnostics.event("wake_phrase_not_found", transcript=text[:300])
+                activity.update("session" if session_active else "listening", "Say Jarvis to continue" if session_active else "Listening")
                 continue
 
             wake_detected = hotword in text.lower()
+            request_id = uuid.uuid4().hex[:12]
             if wake_detected:
                 if not session_active:
                     assistant.reset_session()
                 session_active = True
                 activity.cue("heard")
-                activity.update("session", "Jarvis online", "Conversation active")
+                activity.update("transcribing", "Wake confirmed", "Jarvis heard the activation phrase")
                 text = strip_wake_word(text, hotword)
+                diagnostics.event("wake_phrase_confirmed", request_id=request_id, request=text[:500])
             if not text:
                 activity.append_chat("assistant", "How can I help?")
                 assistant.speak("How can I help?")
@@ -187,8 +197,10 @@ def main() -> int:
             print("Thinking…", flush=True)
             activity.update("planning", "Planning…", text[:100])
             thinking_started = time.perf_counter()
-            reply = fast_commands.execute(text) or assistant.ask(prompt)
+            diagnostics.event("request_started", request_id=request_id, request=text[:500], complex=is_complex_request(text))
+            reply = fast_commands.execute(text) or assistant.ask(prompt, request_id=request_id)
             thinking_seconds = time.perf_counter() - thinking_started
+            diagnostics.event("request_answer_ready", request_id=request_id, duration_ms=round(thinking_seconds * 1000), response_chars=len(reply))
             print(f"Jarvis ({thinking_seconds:.1f}s thinking): {reply}")
             activity.append_chat("assistant", reply)
             speaking_started = time.perf_counter()
@@ -208,8 +220,9 @@ def main() -> int:
                     pending_audio_path = interruption_audio
                     session_active = True
                     continue
-            activity.update("session", "Your turn", "Conversation active — no wake word needed")
+            activity.update("session", "Say Jarvis to continue", "Conversation remains open; wake phrase required")
             activity.cue("complete")
+            diagnostics.event("request_completed", request_id=request_id)
             if args.once:
                 break
         except KeyboardInterrupt:
@@ -219,6 +232,7 @@ def main() -> int:
             activity.update("error", "Problem", str(exc)[:120])
             activity.cue("error")
             print(f"Jarvis error: {exc}", file=sys.stderr)
+            diagnostics.event("request_failed", level="error", error=str(exc), traceback=traceback.format_exc())
             fallback = "I ran into a problem before I could verify the task. I’ve stopped safely instead of pretending it finished."
             activity.append_chat("assistant", fallback)
             try:

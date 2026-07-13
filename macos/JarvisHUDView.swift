@@ -7,6 +7,7 @@ final class JarvisHUDView: NSView {
     var goal = ""
     var steps: [String] = []
     var messages: [[String: String]] = []
+    var actions: [[String: String]] = []
     var eventCount = 0
     private var phase: CGFloat = 0
     private var animationTimer: Timer?
@@ -65,6 +66,19 @@ final class JarvisHUDView: NSView {
             .replacingOccurrences(of: "\n", with: " ")
     }
 
+    private func messagePage(_ value: String, width: CGFloat, height: CGFloat, fontSize: CGFloat) -> (String, Int, Int) {
+        let clean = cleanMessage(value)
+        let columns = max(18, Int(width / (fontSize * 0.62)))
+        let rows = max(2, Int(height / (fontSize + 5)))
+        let capacity = max(40, columns * rows)
+        let characters = Array(clean)
+        let pageCount = max(1, Int(ceil(Double(characters.count) / Double(capacity))))
+        let page = pageCount == 1 ? 0 : Int(phase / 4.0) % pageCount
+        let start = min(characters.count, page * capacity)
+        let end = min(characters.count, start + capacity)
+        return (String(characters[start..<end]), page + 1, pageCount)
+    }
+
     private func rounded(_ rect: NSRect, radius: CGFloat, fill: NSColor, stroke: NSColor) {
         let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
         fill.setFill(); path.fill()
@@ -74,6 +88,8 @@ final class JarvisHUDView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         let a = accent
+        let compact = bounds.width < 1800 || bounds.height < 1000
+        let margin: CGFloat = compact ? 30 : 56
         NSColor.black.withAlphaComponent(0.14).setFill()
         bounds.fill()
 
@@ -96,7 +112,7 @@ final class JarvisHUDView: NSView {
         a.withAlphaComponent(0.8).setStroke(); corner.lineWidth = 2; corner.stroke()
 
         // Central command core.
-        let core = NSPoint(x: bounds.width * 0.67, y: bounds.midY + 45)
+        let core = NSPoint(x: bounds.width * (compact ? 0.74 : 0.61), y: bounds.height * (compact ? 0.43 : 0.48))
         for index in 0..<3 {
             let radius = CGFloat(72 + index * 22) + sin(phase * 2 + CGFloat(index)) * 4
             let ring = NSBezierPath()
@@ -115,47 +131,90 @@ final class JarvisHUDView: NSView {
             a.withAlphaComponent(0.22 + CGFloat(index % 4) * 0.12).setFill(); dot.fill()
         }
 
-        // Bounded live conversation panel.
-        let chatWidth = min(780, max(520, bounds.width * 0.52))
-        let chatPanel = NSRect(x: 56, y: bounds.height - 344, width: chatWidth, height: 286)
+        // Responsive, paged live conversation panel.
+        let chatWidth = compact ? bounds.width - margin * 2 : min(940, bounds.width * 0.48)
+        let chatHeight = compact ? min(360, bounds.height * 0.43) : min(430, bounds.height * 0.46)
+        let chatPanel = NSRect(x: margin, y: bounds.height - chatHeight - margin, width: chatWidth, height: chatHeight)
         rounded(chatPanel, radius: 16, fill: NSColor.black.withAlphaComponent(0.76), stroke: a.withAlphaComponent(0.8))
         text("JARVIS // LIVE CONVERSATION", at: NSPoint(x: chatPanel.minX + 22, y: chatPanel.maxY - 31), size: 12, color: a, weight: .bold)
         text(label.uppercased(), at: NSPoint(x: chatPanel.maxX - 145, y: chatPanel.maxY - 31), size: 11, color: a, weight: .bold)
-        let visibleMessages = Array(messages.suffix(4))
-        for (index, message) in visibleMessages.enumerated() {
+        let visibleMessages = Array(messages.suffix(compact ? 3 : 4))
+        let previous = Array(visibleMessages.dropLast().suffix(compact ? 2 : 3))
+        var cursorY = chatPanel.maxY - 58
+        for message in previous {
             let role = message["role"] ?? "assistant"
             let isUser = role == "user"
-            let rowY = chatPanel.maxY - 82 - CGFloat(index * 54)
-            let bubbleX = isUser ? chatPanel.minX + 120 : chatPanel.minX + 22
-            let bubbleWidth = chatPanel.width - 142
-            let bubble = NSRect(x: bubbleX, y: rowY - 26, width: bubbleWidth, height: 44)
+            let bubbleX = isUser ? chatPanel.minX + 105 : chatPanel.minX + 20
+            let bubbleWidth = chatPanel.width - 125
+            let bubble = NSRect(x: bubbleX, y: cursorY - 38, width: bubbleWidth, height: 34)
             rounded(bubble, radius: 10, fill: (isUser ? NSColor.systemBlue : a).withAlphaComponent(0.18), stroke: (isUser ? NSColor.systemBlue : a).withAlphaComponent(0.48))
-            text(isUser ? "YOU" : "JARVIS", at: NSPoint(x: isUser ? chatPanel.minX + 70 : chatPanel.maxX - 87, y: rowY - 3), size: 9, color: isUser ? .systemBlue : a, weight: .bold)
-            let messageText = cleanMessage(message["text"] ?? "")
-            textBlock(String(messageText.prefix(190)), in: NSRect(x: bubble.minX + 12, y: bubble.minY + 7, width: bubble.width - 24, height: bubble.height - 12), size: 11, color: .white)
+            text(isUser ? "YOU" : "JARVIS", at: NSPoint(x: isUser ? chatPanel.minX + 60 : chatPanel.maxX - 79, y: bubble.minY + 11), size: 8, color: isUser ? .systemBlue : a, weight: .bold)
+            let snippet = cleanMessage(message["text"] ?? "")
+            textBlock(String(snippet.prefix(max(60, Int(bubbleWidth / 6)))), in: NSRect(x: bubble.minX + 10, y: bubble.minY + 7, width: bubble.width - 20, height: 20), size: 10, color: NSColor.white.withAlphaComponent(0.72))
+            cursorY -= 42
         }
-        if visibleMessages.isEmpty {
+        if let latest = visibleMessages.last {
+            let role = latest["role"] ?? "assistant"
+            let isUser = role == "user"
+            let bubble = NSRect(x: chatPanel.minX + 20, y: chatPanel.minY + 18, width: chatPanel.width - 40, height: max(80, cursorY - chatPanel.minY - 24))
+            rounded(bubble, radius: 12, fill: (isUser ? NSColor.systemBlue : a).withAlphaComponent(0.22), stroke: (isUser ? NSColor.systemBlue : a).withAlphaComponent(0.75))
+            text(isUser ? "YOU // LATEST" : "JARVIS // LATEST", at: NSPoint(x: bubble.minX + 13, y: bubble.maxY - 24), size: 9, color: isUser ? .systemBlue : a, weight: .bold)
+            let textRect = NSRect(x: bubble.minX + 13, y: bubble.minY + 12, width: bubble.width - 26, height: bubble.height - 43)
+            let page = messagePage(latest["text"] ?? "", width: textRect.width, height: textRect.height, fontSize: compact ? 11 : 12)
+            textBlock(page.0, in: textRect, size: compact ? 11 : 12, color: .white)
+            if page.2 > 1 {
+                text("AUTO-SCROLL  (page.1)/(page.2)", at: NSPoint(x: bubble.maxX - 125, y: bubble.maxY - 24), size: 8, color: a, weight: .bold)
+            }
+        } else {
             let waiting = cleanGoal(goal.isEmpty ? "Say what you need. I’m listening." : goal)
-            textBlock(String(waiting.prefix(180)), in: NSRect(x: chatPanel.minX + 24, y: chatPanel.midY - 25, width: chatPanel.width - 48, height: 55), size: 14, color: NSColor.white.withAlphaComponent(0.75), weight: .medium)
+            textBlock(waiting, in: NSRect(x: chatPanel.minX + 24, y: chatPanel.midY - 40, width: chatPanel.width - 48, height: 80), size: 14, color: NSColor.white.withAlphaComponent(0.75), weight: .medium)
         }
 
-        // Live action console.
-        let console = NSRect(x: 56, y: 70, width: min(460, bounds.width * 0.34), height: 220)
+        // Detailed action telemetry, responsive to each display size.
+        let consoleWidth = compact ? bounds.width * 0.58 : min(540, bounds.width * 0.30)
+        let consoleHeight = compact ? min(245, bounds.height * 0.29) : min(390, bounds.height * 0.40)
+        let console = NSRect(x: margin, y: margin + 22, width: consoleWidth, height: consoleHeight)
         rounded(console, radius: 14, fill: NSColor.black.withAlphaComponent(0.76), stroke: a.withAlphaComponent(0.65))
-        text("COMMAND STREAM", at: NSPoint(x: console.minX + 22, y: console.maxY - 34), size: 11, color: a, weight: .bold)
-        text("● \(label.uppercased())", at: NSPoint(x: console.minX + 22, y: console.maxY - 67), size: 17, color: .white, weight: .bold)
-        text(String(detail.prefix(64)), at: NSPoint(x: console.minX + 22, y: console.maxY - 98), size: 12, color: NSColor.white.withAlphaComponent(0.72))
-        text("ACTIONS EXECUTED  \(eventCount)", at: NSPoint(x: console.minX + 22, y: console.minY + 25), size: 11, color: a)
+        text("ACTION TELEMETRY // \(actions.count) EVENTS", at: NSPoint(x: console.minX + 18, y: console.maxY - 28), size: 10, color: a, weight: .bold)
+        let actionRows = Array(actions.suffix(compact ? 4 : 6))
+        for (index, action) in actionRows.enumerated() {
+            let rowHeight: CGFloat = compact ? 43 : 49
+            let row = NSRect(x: console.minX + 14, y: console.maxY - 50 - CGFloat(index + 1) * rowHeight, width: console.width - 28, height: rowHeight - 6)
+            let status = action["status"] ?? "running"
+            let color: NSColor = status == "complete" ? .systemGreen : status == "failed" ? .systemRed : a
+            rounded(row, radius: 7, fill: color.withAlphaComponent(status == "running" ? 0.24 : 0.10), stroke: color.withAlphaComponent(0.65))
+            text(status == "complete" ? "✓" : status == "failed" ? "×" : "▶", at: NSPoint(x: row.minX + 9, y: row.midY - 6), size: 13, color: color, weight: .bold)
+            textBlock(action["label"] ?? "ACTION", in: NSRect(x: row.minX + 30, y: row.midY - 1, width: row.width * 0.42, height: 17), size: 9, color: .white, weight: .bold)
+            textBlock(action["target"] ?? "", in: NSRect(x: row.minX + row.width * 0.47, y: row.midY - 1, width: row.width * 0.50, height: 17), size: 9, color: NSColor.white.withAlphaComponent(0.68))
+        }
+        if actionRows.isEmpty {
+            text("STANDING BY FOR AUTHORIZED ACTIONS", at: NSPoint(x: console.minX + 20, y: console.midY), size: 10, color: NSColor.white.withAlphaComponent(0.50))
+        }
 
         // Dependency/step stack on the right.
-        let stackWidth = min(430, bounds.width * 0.32)
-        let stackX = bounds.width - stackWidth - 56
-        text("EXECUTION PATH", at: NSPoint(x: stackX, y: 276), size: 11, color: a, weight: .bold)
-        for (index, step) in steps.prefix(5).enumerated() {
-            let rect = NSRect(x: stackX, y: 222 - CGFloat(index * 42), width: stackWidth, height: 32)
+        let stackWidth = compact ? bounds.width - console.maxX - margin * 2 : min(470, bounds.width * 0.27)
+        let stackX = bounds.width - stackWidth - margin
+        let stackTop = console.maxY - 8
+        text("EXECUTION PATH", at: NSPoint(x: stackX, y: stackTop), size: 10, color: a, weight: .bold)
+        for (index, step) in steps.prefix(compact ? 4 : 6).enumerated() {
+            let rect = NSRect(x: stackX, y: stackTop - 43 - CGFloat(index * 40), width: stackWidth, height: 31)
             let active = index == min(eventCount, max(0, steps.count - 1))
             rounded(rect, radius: 8, fill: (active ? a : NSColor.black).withAlphaComponent(active ? 0.28 : 0.65), stroke: a.withAlphaComponent(active ? 0.9 : 0.28))
-            text("\(index < eventCount ? "✓" : active ? "▶" : "○")  \(String(step.prefix(48)))", at: NSPoint(x: rect.minX + 12, y: rect.minY + 9), size: 11, color: active ? .white : NSColor.white.withAlphaComponent(0.65))
+            textBlock("\(index < eventCount ? "✓" : active ? "▶" : "○")  \(step)", in: NSRect(x: rect.minX + 10, y: rect.minY + 8, width: rect.width - 20, height: 17), size: 9, color: active ? .white : NSColor.white.withAlphaComponent(0.65))
+        }
+
+        // Exaggerated active-action beacon.
+        if let activeAction = actions.last, activeAction["status"] == "running" {
+            let bannerWidth = min(compact ? 500 : 700, bounds.width * 0.46)
+            let banner = NSRect(x: core.x - bannerWidth / 2, y: core.y - 110, width: bannerWidth, height: 58)
+            for ring in 0..<3 {
+                let expansion = CGFloat(ring * 9) + 4 * sin(phase * 3 + CGFloat(ring))
+                let glow = NSBezierPath(roundedRect: banner.insetBy(dx: -expansion, dy: -expansion * 0.5), xRadius: 12, yRadius: 12)
+                a.withAlphaComponent(0.28 - CGFloat(ring) * 0.07).setStroke(); glow.lineWidth = 2; glow.stroke()
+            }
+            rounded(banner, radius: 10, fill: NSColor.black.withAlphaComponent(0.86), stroke: a)
+            text("EXECUTING NOW", at: NSPoint(x: banner.minX + 18, y: banner.maxY - 23), size: 9, color: a, weight: .bold)
+            textBlock("\(activeAction["label"] ?? "ACTION")  //  \(activeAction["target"] ?? "")", in: NSRect(x: banner.minX + 18, y: banner.minY + 10, width: banner.width - 36, height: 20), size: 11, color: .white, weight: .bold)
         }
 
         // Moving scan line.

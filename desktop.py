@@ -6,9 +6,11 @@ import base64
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from openai import OpenAI
+import diagnostics
 
 
 RUNTIME_DIR = Path.home() / "Library" / "Application Support" / "Jarvis" / ".runtime"
@@ -25,6 +27,7 @@ HELPER = (
 
 def inspect_screen(question: str) -> dict:
     path = Path(tempfile.gettempdir()) / "jarvis-screen.png"
+    started = time.perf_counter()
     try:
         if not HELPER.exists():
             return {"ok": False, "error": "The desktop helper is not installed."}
@@ -33,6 +36,11 @@ def inspect_screen(question: str) -> dict:
             capture_output=True, text=True, timeout=30,
         )
         display_mapping = capture.stdout.strip()
+        diagnostics.event(
+            "desktop_capture_completed",
+            duration_ms=round((time.perf_counter() - started) * 1000),
+            mapping=display_mapping,
+        )
         encoded = base64.b64encode(path.read_bytes()).decode("ascii")
         client = OpenAI()
         response = client.responses.create(
@@ -62,6 +70,11 @@ def inspect_screen(question: str) -> dict:
                     ],
                 }
             ],
+        )
+        diagnostics.event(
+            "desktop_vision_completed",
+            duration_ms=round((time.perf_counter() - started) * 1000),
+            analysis_chars=len(response.output_text),
         )
         return {"ok": True, "analysis": response.output_text.strip()}
     finally:

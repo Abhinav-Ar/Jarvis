@@ -14,6 +14,7 @@ import sounddevice as sd
 
 import tools
 import activity
+import diagnostics
 from task_engine import TaskEngine
 
 
@@ -93,13 +94,21 @@ class JarvisAssistant:
         self.previous_response_id = None
         self.task_engine.reset()
 
-    def ask(self, question: str) -> str:
+    def ask(self, question: str, request_id: str = "") -> str:
         activity.update("planning", "Planning…")
+        planning_started = time.perf_counter()
         plan = self.task_engine.plan(self.client, self.model, self.reasoning_effort, question)
+        diagnostics.event(
+            "plan_created", request_id=request_id,
+            duration_ms=round((time.perf_counter() - planning_started) * 1000),
+            lane=self.task_engine.lane, goal=plan.goal, steps=plan.steps,
+            success_criteria=plan.success_criteria, risk=plan.risk,
+        )
         planned_input = (
             f"User request:\n{question}\n\nStructured task plan:\n{self.task_engine.context()}\n"
             "Execute the entire plan now. Do not merely describe it."
         )
+        model_started = time.perf_counter()
         response = self.client.responses.create(
             model=self.model,
             reasoning={"effort": self.reasoning_effort},
@@ -107,6 +116,11 @@ class JarvisAssistant:
             input=planned_input,
             tools=tools.TOOL_DEFINITIONS,
             previous_response_id=self.previous_response_id,
+        )
+        diagnostics.event(
+            "model_response_received", request_id=request_id, round=0,
+            duration_ms=round((time.perf_counter() - model_started) * 1000),
+            function_calls=len([item for item in response.output if item.type == "function_call"]),
         )
 
         # Continue through action, recovery, and evidence-based final verification.
@@ -117,6 +131,8 @@ class JarvisAssistant:
             if not calls:
                 if plan.requires_tools and (tools_since_audit or not audit_performed):
                     activity.update("verifying", "Checking…")
+                    diagnostics.event("completion_audit_started", request_id=request_id)
+                    audit_started = time.perf_counter()
                     response = self.client.responses.create(
                         model=self.model,
                         reasoning={"effort": self.reasoning_effort},
@@ -133,6 +149,11 @@ class JarvisAssistant:
                     )
                     tools_since_audit = False
                     audit_performed = True
+                    diagnostics.event(
+                        "completion_audit_received", request_id=request_id,
+                        duration_ms=round((time.perf_counter() - audit_started) * 1000),
+                        function_calls=len([item for item in response.output if item.type == "function_call"]),
+                    )
                     continue
                 self.previous_response_id = response.id
                 answer = response.output_text.strip() or "I don't have a response for that."
@@ -143,21 +164,34 @@ class JarvisAssistant:
                 else:
                     status = "finished"
                 self.task_engine.finish(status)
+                diagnostics.event("assistant_finalized", request_id=request_id, status=status, answer_chars=len(answer))
                 return answer
 
             tools_since_audit = True
 
             def run_call(call):
+                action_id = ""
                 try:
                     arguments = json.loads(call.arguments or "{}")
-                    if call.name == "desktop_action" and arguments.get("action") == "click":
-                        detail = f"Clicking interface at {arguments.get('x')}, {arguments.get('y')}"
-                    else:
-                        detail = call.name.replace("_", " ")
+                    action_id, detail = activity.begin_action(call.name, arguments)
                     activity.update("working", "Working…", detail)
+                    tool_label, tool_target = activity.describe_tool(call.name, arguments)
+                    diagnostics.event(
+                        "tool_started", request_id=request_id, tool=call.name,
+                        label=tool_label, target=tool_target,
+                    )
+                    tool_started = time.perf_counter()
                     result = tools.execute(call.name, arguments)
                 except Exception as exc:  # Tool failures should not stop conversation.
                     result = {"ok": False, "error": str(exc)}
+                    tool_started = locals().get("tool_started", time.perf_counter())
+                if action_id:
+                    activity.finish_action(action_id, result)
+                diagnostics.event(
+                    "tool_finished", request_id=request_id, tool=call.name,
+                    duration_ms=round((time.perf_counter() - tool_started) * 1000),
+                    ok=bool(result.get("ok")), error=str(result.get("error", ""))[:500],
+                )
                 self.task_engine.record_tool(call.name, result)
                 return {
                     "type": "function_call_output",
@@ -179,8 +213,14 @@ class JarvisAssistant:
                 tools=tools.TOOL_DEFINITIONS,
                 previous_response_id=response.id,
             )
+            diagnostics.event(
+                "model_response_received", request_id=request_id,
+                duration_ms=round((time.perf_counter() - model_started) * 1000),
+                function_calls=len([item for item in response.output if item.type == "function_call"]),
+            )
 
         self.task_engine.finish("blocked")
+        diagnostics.event("execution_limit_reached", level="error", request_id=request_id, rounds=16)
         raise RuntimeError("Jarvis could not verify completion within the bounded execution limit.")
 
     def transcribe(self, audio_path: Path) -> str:
@@ -248,6 +288,10 @@ class JarvisAssistant:
         finally:
             if monitor_context is not None:
                 monitor_context.__exit__(None, None, None)
+        diagnostics.event(
+            "speech_playback_finished", duration_ms=round((time.perf_counter() - request_started) * 1000),
+            first_audio_ms=round(first_audio_delay * 1000), interrupted=interrupted, characters=len(text),
+        )
         return first_audio_delay, interrupted, interruption_audio
 
 

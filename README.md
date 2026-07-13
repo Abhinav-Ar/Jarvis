@@ -22,6 +22,10 @@ tools when requested, and speaks the result through the Mac's audio output.
   Jarvis messages, reset cleanly whenever Jarvis starts
 - Keep the HUD visible during screen inspection while excluding only Jarvis's
   overlay windows from the visual capture
+- Require a confirmed “Jarvis” wake phrase for every actionable turn, even while
+  an existing conversation remains visible
+- Write rotated structured diagnostic events with request IDs, timings, plans,
+  tool results, display mappings, speech playback, and redacted failures
 - Use local activation/completion sounds and an “On it” acknowledgement for
   longer tasks
 - Route common local commands instantly and skip full planning and auditing for

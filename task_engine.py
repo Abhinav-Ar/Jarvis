@@ -9,6 +9,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+import diagnostics
 
 
 PLAN_SCHEMA = {
@@ -124,7 +125,8 @@ class TaskEngine:
                 },
             )
             plan = TaskPlan(**json.loads(response.output_text))
-        except Exception:
+        except Exception as exc:
+            diagnostics.event("planner_fallback", level="warning", error=str(exc), request=request[:500])
             plan = TaskPlan.fallback(request)
         self.record = TaskRecord(uuid.uuid4().hex, request, plan)
         self._save()

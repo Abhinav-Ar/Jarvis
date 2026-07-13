@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var activityFile = appDirectory.appendingPathComponent(".runtime/activity.json")
     private lazy var previewFlag = appDirectory.appendingPathComponent(".runtime/hud-preview")
     private lazy var chatFile = appDirectory.appendingPathComponent(".runtime/chat.json")
+    private lazy var actionsFile = appDirectory.appendingPathComponent(".runtime/actions.json")
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
     private var detailMenuItem: NSMenuItem!
@@ -46,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Restart Jarvis", action: #selector(restartJarvis), keyEquivalent: "r"))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Open Recent Log", action: #selector(openLog), keyEquivalent: "l"))
+        menu.addItem(NSMenuItem(title: "Open Diagnostic Events", action: #selector(openDiagnostics), keyEquivalent: "e"))
         menu.addItem(NSMenuItem(title: "Open Runtime Folder", action: #selector(openRuntime), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Preview Full-Screen HUD", action: #selector(previewHUD), keyEquivalent: "h"))
         menu.addItem(.separator())
@@ -193,6 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var steps: [String] = []
         var events = 0
         var messages: [[String: String]] = []
+        var actions: [[String: String]] = []
         let taskFile = appDirectory.appendingPathComponent(".runtime/active-task.json")
         if let data = try? Data(contentsOf: taskFile),
            let task = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -209,13 +212,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return ["role": role, "text": text]
             }
         }
+        if let data = try? Data(contentsOf: actionsFile),
+           let values = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            actions = values.compactMap { item in
+                guard let label = item["label"] as? String, let status = item["status"] as? String else { return nil }
+                return [
+                    "label": label,
+                    "target": item["target"] as? String ?? "",
+                    "status": status,
+                    "result": item["result"] as? String ?? "",
+                ]
+            }
+        }
         hudView?.state = state
         hudView?.label = label
         hudView?.detail = detail
         hudView?.goal = goal
         hudView?.steps = steps
-        hudView?.eventCount = events
+        hudView?.eventCount = max(events, actions.count)
         hudView?.messages = messages
+        hudView?.actions = actions
         hudView?.needsDisplay = true
         let frame = targetScreen().visibleFrame
         hud?.setFrame(frame, display: true)
@@ -268,6 +284,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openLog() {
         let log = appDirectory.appendingPathComponent(".runtime/jarvis.log")
+        NSWorkspace.shared.open(log)
+    }
+
+    @objc private func openDiagnostics() {
+        let log = appDirectory.appendingPathComponent(".runtime/events.jsonl")
         NSWorkspace.shared.open(log)
     }
 

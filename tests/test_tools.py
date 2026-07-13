@@ -35,6 +35,15 @@ class ToolTests(unittest.TestCase):
             }
         self.assertEqual(function_names, handler_names)
 
+    def test_tool_selection_keeps_only_relevant_integrations(self):
+        names = {definition["name"] for definition in tools.select_definitions("Play my UG Spotify playlist")}
+        self.assertIn("spotify_play_playlist", names)
+        self.assertNotIn("desktop_action", names)
+        self.assertNotIn("git_commit", names)
+
+    def test_general_conversation_sends_no_tools(self):
+        self.assertEqual(tools.select_definitions("Tell me a short joke"), [])
+
     @patch.dict("os.environ", {}, clear=True)
     def test_optional_integrations_fail_cleanly_without_secrets(self):
         self.assertFalse(integrations.todoist_create_task("test")["ok"])

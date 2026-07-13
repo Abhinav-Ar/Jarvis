@@ -259,7 +259,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
     private func updateHUD(state: String, label: String, detail: String) {
         let visible = ["session", "transcribing", "planning", "working", "verifying", "speaking", "needs_input", "error"].contains(state)
-        if !visible { hud?.orderOut(nil); return }
+        if !visible {
+            hudView?.setAnimating(false)
+            hud?.orderOut(nil)
+            return
+        }
         if hud == nil {
             let frame = targetScreen().visibleFrame
             let panel = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
@@ -311,6 +315,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             }
         }
         hudView?.state = state
+        hudView?.setAnimating(true)
         hudView?.label = label
         hudView?.detail = detail
         hudView?.goal = goal

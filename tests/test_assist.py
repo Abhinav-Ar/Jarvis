@@ -1,7 +1,9 @@
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
@@ -22,6 +24,7 @@ class FakeResponses:
 class AssistantTests(unittest.TestCase):
     @staticmethod
     def bypass_planner(assistant, requires_tools=False):
+        assistant.task_engine.lane = "complex" if requires_tools else "simple"
         assistant.task_engine.plan = lambda *args: TaskPlan(
             "test", requires_tools, ["done"], ["act", "verify"], "low", []
         )
@@ -31,6 +34,23 @@ class AssistantTests(unittest.TestCase):
             "Latest: [AP News](https://apnews.com/story) and https://example.com/details"
         )
         self.assertEqual(spoken, "Latest: AP News and")
+
+    def test_streaming_transcription_returns_completed_text(self):
+        events = iter([
+            SimpleNamespace(type="transcript.text.delta", delta="Hello "),
+            SimpleNamespace(type="transcript.text.delta", delta="Jarvis"),
+            SimpleNamespace(type="transcript.text.done", text="Hello Jarvis"),
+        ])
+        create = Mock(return_value=events)
+        assistant = JarvisAssistant()
+        assistant.client = SimpleNamespace(audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create)))
+        path = Path(tempfile.gettempdir()) / "jarvis-test-audio.wav"
+        path.write_bytes(b"test")
+        try:
+            self.assertEqual(assistant.transcribe(path), "Hello Jarvis")
+            self.assertTrue(create.call_args.kwargs["stream"])
+        finally:
+            path.unlink(missing_ok=True)
 
     @patch.dict(os.environ, {"OPENAI_MODEL": "gpt-5-mini"})
     def test_older_mini_model_uses_compatible_reasoning_effort(self):
@@ -69,6 +89,20 @@ class AssistantTests(unittest.TestCase):
         self.assertEqual(output["call_id"], "call-1")
         self.assertIn('"ok": true', output["output"])
         self.assertEqual(assistant.previous_response_id, "r2")
+
+    def test_simple_verified_action_skips_second_model_round_trip(self):
+        tool_call = SimpleNamespace(
+            type="function_call", name="open_application", arguments='{"name":"Safari"}', call_id="c1"
+        )
+        action = SimpleNamespace(id="r1", output=[tool_call], output_text="")
+        assistant = JarvisAssistant()
+        self.bypass_planner(assistant)
+        fake = FakeResponses([action])
+        assistant.client = SimpleNamespace(responses=fake)
+
+        with patch("assist.tools.execute", return_value={"ok": True, "application": "Safari", "frontmost": True}):
+            self.assertEqual(assistant.ask("Open Safari"), "Safari is open.")
+        self.assertEqual(len(fake.calls), 1)
 
     def test_actionable_task_is_audited_before_completion(self):
         tool_call = SimpleNamespace(

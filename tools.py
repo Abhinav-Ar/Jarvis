@@ -368,6 +368,43 @@ TOOL_DEFINITIONS = [
 ]
 
 
+TOOL_GROUPS = {
+    "web": {"get_weather", "open_search", "browser_navigate"},
+    "spotify": {"spotify_control", "spotify_play_playlist", "spotify_create_discovery_playlist"},
+    "mac": {"open_application", "set_system_volume", "clipboard", "system_status", "show_notification"},
+    "productivity": {
+        "create_reminder", "create_note", "create_calendar_event", "todoist_create_task",
+        "create_email_draft", "find_contact", "find_files", "apple_shortcuts",
+    },
+    "home": {"home_assistant_control"},
+    "desktop": {"open_application", "desktop_inspect", "desktop_action"},
+    "git": {"open_application", "git_repositories", "git_status", "git_commit", "git_commit_and_push"},
+}
+
+
+def select_definitions(request: str) -> list[dict]:
+    """Send only tools relevant to this turn, keeping prompts small and choices clear."""
+    text = request.lower()
+    selected: set[str] = set()
+    routes = (
+        (("spotify", "playlist", "song", "music", "track", "album", "artist"), "spotify"),
+        (("github", "git ", "repository", "repo", "commit", "push", "branch"), "git"),
+        (("screen", "desktop", "click", "type into", "what do you see", "fill out"), "desktop"),
+        (("weather", "news", "search", "website", "url", ".com", "safari", "browser"), "web"),
+        (("reminder", "note", "calendar", "todoist", "email", "contact", "file", "shortcut"), "productivity"),
+        (("light", "thermostat", "home assistant", "switch"), "home"),
+        (("open ", "launch ", "volume", "clipboard", "battery", "system status", "notification"), "mac"),
+    )
+    for markers, group in routes:
+        if any(marker in text for marker in markers):
+            selected.update(TOOL_GROUPS[group])
+    # Questions with no actionable signal need no tool schema at all. Current-data
+    # questions keep a narrow web lane.
+    if not selected and any(marker in text for marker in ("today", "current", "latest", "right now")):
+        selected.update(TOOL_GROUPS["web"])
+    return [definition for definition in TOOL_DEFINITIONS if definition.get("name") in selected]
+
+
 def get_weather(location: str) -> dict:
     headers = {"User-Agent": "Jarvis personal voice assistant"}
     geo = requests.get(
@@ -462,6 +499,34 @@ def execute(name: str, arguments: dict) -> dict:
     if name not in handlers:
         return {"ok": False, "error": f"Unknown tool: {name}"}
     return handlers[name](**arguments)
+
+
+def result_summary(name: str, arguments: dict, result: dict) -> str:
+    """Natural zero-token confirmation for successful, unambiguous tool results."""
+    if not result.get("ok"):
+        return ""
+    if name == "open_application":
+        return f"{result.get('application') or arguments.get('name', 'The application')} is open."
+    if name == "browser_navigate":
+        return f"Done — {result.get('url') or arguments.get('url')} is open."
+    if name == "set_system_volume":
+        return f"Volume set to {result.get('volume', arguments.get('level'))} percent."
+    if name == "spotify_control":
+        action = arguments.get("action", "")
+        return {"pause": "Paused.", "play": "Playing.", "next": "Skipped.", "previous": "Going back."}.get(action, "Done.")
+    if name == "spotify_play_playlist":
+        return f"Playing {result.get('name') or arguments.get('name', 'your playlist')}."
+    if name == "show_notification":
+        return "Notification shown."
+    if name == "create_reminder":
+        return f"Reminder created: {result.get('title') or arguments.get('title')}."
+    if name == "create_note":
+        return f"Note created: {result.get('title') or arguments.get('title')}."
+    if name == "todoist_create_task":
+        return f"Todoist task created: {arguments.get('content', 'your task')}."
+    if name == "desktop_action":
+        return "Done."
+    return ""
 
 
 def parse_command(command: str) -> None:

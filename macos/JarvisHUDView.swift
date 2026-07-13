@@ -16,7 +16,6 @@ final class JarvisHUDView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        animationTimer = Timer.scheduledTimer(timeInterval: 1.0 / 24.0, target: self, selector: #selector(animate), userInfo: nil, repeats: true)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -24,6 +23,18 @@ final class JarvisHUDView: NSView {
     @objc private func animate() {
         phase += 0.035
         needsDisplay = true
+    }
+
+    func setAnimating(_ enabled: Bool) {
+        if enabled, animationTimer == nil {
+            animationTimer = Timer.scheduledTimer(
+                timeInterval: 1.0 / 24.0, target: self,
+                selector: #selector(animate), userInfo: nil, repeats: true
+            )
+        } else if !enabled {
+            animationTimer?.invalidate()
+            animationTimer = nil
+        }
     }
 
     private var accent: NSColor {

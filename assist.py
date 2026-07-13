@@ -107,17 +107,24 @@ class JarvisAssistant:
             lane=self.task_engine.lane, goal=plan.goal, steps=plan.steps,
             success_criteria=plan.success_criteria, risk=plan.risk,
         )
-        planned_input = (
+        selected_tools = tools.select_definitions(question)
+        complex_task = self.task_engine.lane == "complex"
+        turn_effort = self.reasoning_effort if complex_task else "none"
+        planned_input = question if not complex_task else (
             f"User request:\n{question}\n\nStructured task plan:\n{self.task_engine.context()}\n"
             "Execute the entire plan now. Do not merely describe it."
+        )
+        diagnostics.event(
+            "tool_lane_selected", request_id=request_id, lane=self.task_engine.lane,
+            tools=[definition["name"] for definition in selected_tools], reasoning=turn_effort,
         )
         model_started = time.perf_counter()
         response = self.client.responses.create(
             model=self.model,
-            reasoning={"effort": self.reasoning_effort},
+            reasoning={"effort": turn_effort},
             instructions=SYSTEM_PROMPT,
             input=planned_input,
-            tools=tools.TOOL_DEFINITIONS,
+            tools=selected_tools,
             previous_response_id=self.previous_response_id,
         )
         diagnostics.event(
@@ -129,16 +136,16 @@ class JarvisAssistant:
         # Continue through action, recovery, and evidence-based final verification.
         tools_since_audit = False
         audit_performed = False
-        for _ in range(16):
+        for _ in range(8):
             calls = [item for item in response.output if item.type == "function_call"]
             if not calls:
-                if plan.requires_tools and (tools_since_audit or not audit_performed):
+                if complex_task and plan.requires_tools and (tools_since_audit or not audit_performed):
                     activity.update("verifying", "Checking…")
                     diagnostics.event("completion_audit_started", request_id=request_id)
                     audit_started = time.perf_counter()
                     response = self.client.responses.create(
                         model=self.model,
-                        reasoning={"effort": self.reasoning_effort},
+                        reasoning={"effort": turn_effort},
                         instructions=SYSTEM_PROMPT,
                         input=(
                             "Audit the active task against every success criterion. "
@@ -147,7 +154,7 @@ class JarvisAssistant:
                             "are evidenced, give the concise final answer. Do not repeat actions "
                             "whose successful results are already recorded."
                         ),
-                        tools=tools.TOOL_DEFINITIONS,
+                        tools=selected_tools,
                         previous_response_id=response.id,
                     )
                     tools_since_audit = False
@@ -171,6 +178,7 @@ class JarvisAssistant:
                 return answer
 
             tools_since_audit = True
+            completed_calls: list[tuple[str, dict, dict]] = []
 
             def run_call(call):
                 action_id = ""
@@ -196,24 +204,40 @@ class JarvisAssistant:
                     ok=bool(result.get("ok")), error=str(result.get("error", ""))[:500],
                 )
                 self.task_engine.record_tool(call.name, result)
+                completed_calls.append((call.name, arguments if 'arguments' in locals() else {}, result))
                 return {
                     "type": "function_call_output",
                     "call_id": call.call_id,
                     "output": json.dumps(result),
                 }
 
-            if len(calls) > 1:
+            safe_parallel = {
+                "get_weather", "open_search", "system_status", "find_contact", "find_files",
+                "git_repositories", "git_status", "desktop_inspect",
+            }
+            if len(calls) > 1 and all(call.name in safe_parallel for call in calls):
                 with ThreadPoolExecutor(max_workers=min(4, len(calls))) as executor:
                     outputs = list(executor.map(run_call, calls))
             else:
-                outputs = [run_call(calls[0])]
+                outputs = [run_call(call) for call in calls]
+
+            if not complex_task and completed_calls and all(result.get("ok") for _, _, result in completed_calls):
+                summaries = [tools.result_summary(name, arguments, result) for name, arguments, result in completed_calls]
+                if all(summaries):
+                    answer = " ".join(dict.fromkeys(summaries))
+                    self.task_engine.finish("finished")
+                    diagnostics.event(
+                        "local_tool_confirmation", request_id=request_id,
+                        tools=[name for name, _, _ in completed_calls], answer_chars=len(answer),
+                    )
+                    return answer
 
             response = self.client.responses.create(
                 model=self.model,
-                reasoning={"effort": self.reasoning_effort},
+                reasoning={"effort": turn_effort},
                 instructions=SYSTEM_PROMPT,
                 input=outputs,
-                tools=tools.TOOL_DEFINITIONS,
+                tools=selected_tools,
                 previous_response_id=response.id,
             )
             diagnostics.event(
@@ -223,7 +247,7 @@ class JarvisAssistant:
             )
 
         self.task_engine.finish("blocked")
-        diagnostics.event("execution_limit_reached", level="error", request_id=request_id, rounds=16)
+        diagnostics.event("execution_limit_reached", level="error", request_id=request_id, rounds=8)
         raise RuntimeError("Jarvis could not verify completion within the bounded execution limit.")
 
     def transcribe(self, audio_path: Path) -> str:
@@ -232,8 +256,20 @@ class JarvisAssistant:
                 model=os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe"),
                 file=audio,
                 language=os.getenv("JARVIS_LANGUAGE", "en"),
+                stream=os.getenv("JARVIS_STREAM_TRANSCRIPTION", "1") == "1",
             )
-        return result.text.strip()
+            if hasattr(result, "text"):
+                return result.text.strip()
+            final_text = ""
+            partial = ""
+            for event in result:
+                if getattr(event, "type", "") == "transcript.text.delta":
+                    partial += getattr(event, "delta", "")
+                    if partial.strip():
+                        activity.update("transcribing", "Hearing…", partial.strip()[-120:])
+                elif getattr(event, "type", "") == "transcript.text.done":
+                    final_text = getattr(event, "text", "")
+            return (final_text or partial).strip()
 
     @staticmethod
     def speech_text(text: str) -> str:

@@ -111,9 +111,18 @@ each feature is first used:
 - **Notifications** for local alerts
 - Possibly **Files and Folders** or **Full Disk Access** if you want Spotlight
   results from protected locations
+- **Screen & System Audio Recording** for on-demand visual screen inspection
+- **Accessibility** for permission-gated clicking, typing, keys, and scrolling
 
 Review these under System Settings → Privacy & Security. Denying one permission
 only disables that related action.
+
+The Jarvis menu provides direct shortcuts to the Screen Recording and
+Accessibility panes. Add `~/Applications/Jarvis Menu.app` or enable
+**Jarvis Menu** in both lists, then restart it
+from the login service if macOS requests a restart. Desktop control remains off
+until you explicitly choose **Enable Desktop Control**; the menu label turns
+orange and displays a warning symbol while control is active.
 
 ## Run
 
@@ -129,7 +138,57 @@ Voice mode:
 ./start.sh
 ```
 
+## Always-on background service (macOS)
+
+The first implementation of the final local architecture is included as a user
+LaunchAgent. It runs in your signed-in graphical session, starts at login, keeps
+Jarvis alive after crashes, writes local logs, and stays stopped after the clean
+“Jarvis, log off” command.
+
+The installer deploys a private runtime copy to
+`~/Library/Application Support/Jarvis`. This is necessary because macOS blocks
+background agents from reliably reading executables under the protected
+`Documents` directory. Re-run the installer after changing source or `.env` to
+update the deployed copy.
+
+Installation also builds an ad-hoc-signed native Swift menu-bar controller at
+`~/Applications/Jarvis Menu.app`. A
+green `● Jarvis` means it is listening; gray means it is stopped. Its menu offers
+Start, Stop, Restart, current status, recent logs, and the runtime folder. Stop
+unloads the voice service until Start is selected; it does not auto-restart. The
+controller itself intentionally has no Quit option and is automatically restored
+if it crashes. It has no Dock icon and starts at login with the voice service.
+
+Install it only after normal voice mode works and macOS microphone permission has
+already been granted:
+
+```sh
+./install-background.sh
+```
+
+Manage it with:
+
+```sh
+./jarvisctl status
+./jarvisctl logs           # print recent entries and return
+./jarvisctl logs --follow  # continuous live stream; Control-C exits the view
+./jarvisctl stop
+./jarvisctl start
+./jarvisctl restart
+```
+
+Remove the login service without deleting Jarvis or its logs:
+
+```sh
+./uninstall-background.sh
+```
+
+This is the background-service foundation, not yet the final signed menu-bar app
+or local neural wake-word engine. macOS must be awake and the user logged in for
+microphone access.
+
 Say “Jarvis” followed by a request. Press Control-C to stop.
+Say “Jarvis, log off” to end the assistant cleanly without using Control-C.
 
 ```sh
 ./start.sh --no-hotword   # respond to every detected phrase
@@ -173,7 +232,9 @@ explicitly requested. Conversation memory lasts until Jarvis exits.
 Spotify discovery processes listening metadata locally and sends only a success
 summary to the language model. It paginates large libraries, inspects playlist
 items Spotify permits, handles sparse history, excludes duplicates and non-track
-items, and retries rate limits and temporary failures. “Unheard” means absent
+items, weights recent plays and four-week affinity first, and retries rate limits
+and temporary failures. Existing-playlist playback is a separate action and can
+never create a playlist. “Unheard” means absent
 from the history and accessible playlists Spotify exposes; Spotify does not
 provide a complete lifetime listening ledger.
 

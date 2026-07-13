@@ -1,9 +1,14 @@
 import unittest
 
-from jarvis import request_is_active
+from jarvis import is_logoff_command, request_is_active
 
 
 class RequestActivationTests(unittest.TestCase):
+    def test_log_off_is_local_lifecycle_command(self):
+        self.assertTrue(is_logoff_command("log off"))
+        self.assertTrue(is_logoff_command("Log out!"))
+        self.assertFalse(is_logoff_command("log off Spotify"))
+
     def test_text_mode_does_not_require_hotword(self):
         self.assertTrue(
             request_is_active(

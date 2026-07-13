@@ -28,6 +28,8 @@ class ToolTests(unittest.TestCase):
                 "create_reminder", "create_note", "create_calendar_event",
                 "todoist_create_task", "home_assistant_control", "create_email_draft",
                 "find_contact", "find_files", "apple_shortcuts",
+                "spotify_play_playlist", "spotify_create_discovery_playlist",
+                "desktop_inspect", "desktop_action",
             }
         self.assertEqual(function_names, handler_names)
 

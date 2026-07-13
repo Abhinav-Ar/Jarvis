@@ -25,6 +25,11 @@ def request_is_active(text: str, *, text_mode: bool, no_hotword: bool, follow_up
     return text_mode or no_hotword or follow_up or hotword in text.lower()
 
 
+def is_logoff_command(text: str) -> bool:
+    normalized = " ".join(text.lower().strip(" ,.?!").split())
+    return normalized in {"log off", "log out", "logout", "go offline", "shut down jarvis"}
+
+
 def main() -> int:
     load_dotenv()
     args = arguments()
@@ -95,6 +100,11 @@ def main() -> int:
                 assistant.speak("Yes?")
                 follow_up = True
                 continue
+
+            if is_logoff_command(text):
+                print("Jarvis: Logging off.")
+                assistant.speak("Logging off.")
+                break
 
             prompt = f"Local time: {datetime.now().astimezone().isoformat(timespec='minutes')}\nUser: {text}"
             print("Thinking…", flush=True)

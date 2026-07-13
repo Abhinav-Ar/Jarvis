@@ -18,11 +18,54 @@ class SpotifyTests(unittest.TestCase):
         self.assertTrue(spot._api(spotify, "GET", "me")["ok"])
         sleep.assert_called_once_with(1.0)
 
-    @patch("spot.create_discovery_playlist", return_value={"ok": True, "tracks_added": 8})
-    def test_taste_playlist_is_built_inside_spotify_integration(self, create_playlist):
-        result = spot.control("taste_playlist", "Fresh Finds")
+    @patch("spot._play_context")
+    @patch("spot._collect_offset")
+    @patch("spot._api", return_value={"id": "me"})
+    @patch("spot._client")
+    def test_named_playlist_playback_does_not_create_playlist(self, client, api, collect, play_context):
+        collect.return_value = [
+            {"name": "UG", "uri": "spotify:playlist:123", "owner": {"id": "me"}, "collaborative": False}
+        ]
+        result = spot.play_playlist("ug")
         self.assertTrue(result["ok"])
-        create_playlist.assert_called_once_with("Fresh Finds")
+        play_context.assert_called_once_with(client.return_value, "spotify:playlist:123")
+
+    @patch("spot._play_context")
+    @patch("spot._collect_offset")
+    @patch("spot._api", return_value={"id": "me"})
+    @patch("spot._client")
+    def test_my_playlists_excludes_followed_lists_owned_by_others(self, client, api, collect, play_context):
+        collect.return_value = [
+            {"name": "Someone Else", "uri": "spotify:playlist:other", "owner": {"id": "other"}, "collaborative": False},
+            {"name": "Shared", "uri": "spotify:playlist:shared", "owner": {"id": "other"}, "collaborative": True},
+        ]
+        result = spot.play_playlist("")
+        self.assertTrue(result["ok"])
+        play_context.assert_called_once_with(client.return_value, "spotify:playlist:shared")
+
+    @patch("spot.time.sleep")
+    @patch("spot.subprocess.run")
+    def test_playlist_context_activates_connect_device_before_playing(self, run, sleep):
+        spotify = Mock()
+        spotify.start_playback.side_effect = [
+            spotipy.SpotifyException(404, -1, "No active device"),
+            None,
+        ]
+        spotify.devices.return_value = {
+            "devices": [
+                {
+                    "id": "mac",
+                    "type": "Computer",
+                    "is_active": False,
+                    "is_restricted": False,
+                }
+            ]
+        }
+        spot._play_context(spotify, "spotify:playlist:123")
+        spotify.transfer_playback.assert_called_once_with("mac", force_play=False)
+        spotify.start_playback.assert_called_with(
+            device_id="mac", context_uri="spotify:playlist:123"
+        )
 
     @patch("spot._local_play")
     @patch("spot._client")

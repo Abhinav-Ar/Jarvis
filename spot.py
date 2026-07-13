@@ -192,9 +192,19 @@ def create_discovery_playlist(name: str = "Jarvis Discoveries") -> dict:
 
 def play_playlist(name: str = "") -> dict:
     spotify = _client()
-    playlists = _collect_offset(spotify, "me/playlists", limit=50, maximum=500)
+    profile = _api(spotify, "GET", "me")
+    available = _collect_offset(spotify, "me/playlists", limit=50, maximum=500)
+    playlists = [
+        playlist
+        for playlist in available
+        if playlist.get("owner", {}).get("id") == profile.get("id")
+        or bool(playlist.get("collaborative"))
+    ]
     if not playlists:
-        return {"ok": False, "error": "No Spotify playlists are available in this account."}
+        return {
+            "ok": False,
+            "error": "No owned or collaborative Spotify playlists are available in this account.",
+        }
     requested = name.strip().casefold()
     if requested:
         exact = [p for p in playlists if (p.get("name") or "").casefold() == requested]
@@ -208,7 +218,7 @@ def play_playlist(name: str = "") -> dict:
     uri = playlist.get("uri")
     if not uri:
         return {"ok": False, "error": "The selected playlist has no playable Spotify URI."}
-    _local_play(uri)
+    _play_context(spotify, uri)
     return {
         "ok": True,
         "action": "play_existing_playlist",
@@ -227,6 +237,38 @@ def _local_play(uri: str | None = None) -> None:
         timeout=20,
         capture_output=True,
         text=True,
+    )
+
+
+def _play_context(spotify: spotipy.Spotify, uri: str) -> None:
+    """Start the selected playlist context instead of resuming the current track."""
+    try:
+        spotify.start_playback(context_uri=uri)
+        return
+    except spotipy.SpotifyException as exc:
+        if exc.http_status not in {403, 404}:
+            raise
+
+    # Wake Spotify on this Mac, wait for its Connect device, then target the
+    # selected playlist explicitly. Merely opening a playlist URI does not play it.
+    subprocess.run(["/usr/bin/open", "-a", "Spotify", uri], check=True, timeout=20)
+    for _ in range(12):
+        devices = spotify.devices().get("devices", [])
+        usable = [
+            device
+            for device in devices
+            if device.get("id") and not device.get("is_restricted")
+        ]
+        active = next((device for device in usable if device.get("is_active")), None)
+        computer = next((device for device in usable if device.get("type") == "Computer"), None)
+        device = active or computer or (usable[0] if usable else None)
+        if device:
+            spotify.transfer_playback(device["id"], force_play=False)
+            spotify.start_playback(device_id=device["id"], context_uri=uri)
+            return
+        time.sleep(0.5)
+    raise RuntimeError(
+        "Spotify opened the playlist, but this Mac did not appear as an available Connect device."
     )
 
 

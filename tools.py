@@ -10,6 +10,7 @@ import requests
 
 import integrations
 import mac_tools
+import desktop
 
 
 TOOL_DEFINITIONS = [
@@ -62,7 +63,7 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "name": "spotify_play_playlist",
-        "description": "Play one of the user's existing Spotify playlists. Set name to the requested playlist name, or empty only when the user asks for any/random existing playlist. This never creates a playlist.",
+        "description": "Play one of the user's owned or collaborative Spotify playlists. Followed playlists owned by others are excluded from 'my playlists'. Set name to the requested playlist name, or empty only for any/random. This never creates a playlist.",
         "parameters": {
             "type": "object",
             "properties": {"name": {"type": "string"}},
@@ -74,7 +75,7 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "name": "spotify_create_discovery_playlist",
-        "description": "Create a new private Spotify discovery playlist using recent listening taste. Use only when the user explicitly asks to create or make a new discovery/recommendation playlist. Never use for requests to play an existing playlist.",
+        "description": "Create a new private Spotify discovery playlist using recent listening taste. Call ONLY when the requested action verb is create, make, build, or generate. Never call when the request verb is play, open, start, resume, or listen—even if the existing playlist is named Discovery Playlist.",
         "parameters": {
             "type": "object",
             "properties": {"name": {"type": "string"}},
@@ -265,6 +266,38 @@ TOOL_DEFINITIONS = [
         },
         "strict": True,
     },
+    {
+        "type": "function",
+        "name": "desktop_inspect",
+        "description": "Capture and visually inspect the current Mac screen for an explicit user request. This is read-only and redacts sensitive categories. Use before any coordinate action.",
+        "parameters": {
+            "type": "object",
+            "properties": {"question": {"type": "string"}},
+            "required": ["question"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "desktop_action",
+        "description": "Perform one bounded Mac input action after screen inspection. Desktop control must be visibly enabled in the menu. Never interact with passwords, authentication codes, payment data, purchases, deletions, messages, or final form submission without explicit confirmation. Coordinates use screenshot pixels.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["click", "type", "key", "scroll"]},
+                "x": {"type": "integer"},
+                "y": {"type": "integer"},
+                "text": {"type": "string"},
+                "key": {"type": "string", "enum": ["return", "enter", "tab", "escape", "space", "delete"]},
+                "amount": {"type": "integer"},
+                "confirmed": {"type": "boolean"},
+            },
+            "required": ["action", "x", "y", "text", "key", "amount", "confirmed"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
 ]
 
 
@@ -351,6 +384,8 @@ def execute(name: str, arguments: dict) -> dict:
         "find_contact": mac_tools.find_contact,
         "find_files": mac_tools.find_files,
         "apple_shortcuts": mac_tools.shortcuts,
+        "desktop_inspect": desktop.inspect_screen,
+        "desktop_action": desktop.perform_action,
     }
     if name not in handlers:
         return {"ok": False, "error": f"Unknown tool: {name}"}

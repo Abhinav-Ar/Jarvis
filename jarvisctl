@@ -1,0 +1,69 @@
+#!/bin/zsh
+set -e
+
+PROJECT_DIR="${0:A:h}"
+APP_DIR="$HOME/Library/Application Support/Jarvis"
+LABEL="com.jarvis.voice"
+SERVICE="gui/$UID/$LABEL"
+COMMAND="${1:-status}"
+
+case "$COMMAND" in
+  start)
+    launchctl enable "$SERVICE"
+    if launchctl print "$SERVICE" >/dev/null 2>&1; then
+      launchctl kickstart "$SERVICE"
+    else
+      launchctl bootstrap "gui/$UID" "$HOME/Library/LaunchAgents/$LABEL.plist"
+    fi
+    echo "Jarvis started."
+    ;;
+  stop)
+    launchctl bootout "$SERVICE" 2>/dev/null || true
+    echo "Jarvis stopped. Use './jarvisctl start' to enable it again."
+    ;;
+  restart)
+    if launchctl print "$SERVICE" >/dev/null 2>&1; then
+      launchctl kickstart -k "$SERVICE"
+    else
+      launchctl enable "$SERVICE"
+      launchctl bootstrap "gui/$UID" "$HOME/Library/LaunchAgents/$LABEL.plist"
+    fi
+    echo "Jarvis restarted."
+    ;;
+  status)
+    if launchctl print "$SERVICE" >/dev/null 2>&1; then
+      DETAILS="$(launchctl print "$SERVICE")"
+      if [[ "$DETAILS" == *"state = running"* ]]; then
+        PID="$(echo "$DETAILS" | awk '/pid =/{print $3; exit}')"
+        echo "Jarvis is running${PID:+ (PID $PID)}."
+      else
+        echo "Jarvis is installed but stopped. Start it with './jarvisctl start'."
+      fi
+    else
+      if [[ -f "$HOME/Library/LaunchAgents/$LABEL.plist" ]]; then
+        echo "Jarvis is installed but stopped. Start it with './jarvisctl start'."
+      else
+        echo "Jarvis is not installed as a background service."
+        exit 1
+      fi
+    fi
+    ;;
+  logs)
+    LOG_FILE="$APP_DIR/.runtime/jarvis.log"
+    ERROR_FILE="$APP_DIR/.runtime/jarvis-error.log"
+    if [[ ! -f "$LOG_FILE" || ! -f "$ERROR_FILE" ]]; then
+      echo "Jarvis log files do not exist yet. Start Jarvis and try again."
+      exit 1
+    fi
+    if [[ "${2:-}" == "--follow" ]]; then
+      tail -n 100 -f "$LOG_FILE" "$ERROR_FILE"
+    else
+      tail -n 100 "$LOG_FILE" "$ERROR_FILE"
+      echo "Use './jarvisctl logs --follow' for a continuous live view."
+    fi
+    ;;
+  *)
+    echo "Usage: ./jarvisctl {start|stop|restart|status|logs [--follow]}"
+    exit 2
+    ;;
+esac

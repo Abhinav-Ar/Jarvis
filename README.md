@@ -18,6 +18,10 @@ tools when requested, and speaks the result through the Mac's audio output.
   from failed steps, and audit success criteria before reporting completion
 - Show live hearing, planning, working, checking, speaking, needs-input, and error
   states through the menu bar and a temporary floating progress panel
+- Present the active voice session as a bounded live chat showing both user and
+  Jarvis messages, reset cleanly whenever Jarvis starts
+- Keep the HUD visible during screen inspection while excluding only Jarvis's
+  overlay windows from the visual capture
 - Use local activation/completion sounds and an “On it” acknowledgement for
   longer tasks
 - Route common local commands instantly and skip full planning and auditing for

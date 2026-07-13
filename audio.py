@@ -30,7 +30,7 @@ class PhraseRecorder:
     def devices() -> str:
         return str(sd.query_devices())
 
-    def listen(self) -> Path:
+    def listen(self, on_speech_start=None) -> Path:
         chunks: queue.Queue[bytes] = queue.Queue()
 
         def callback(indata, frames, time_info, status):
@@ -59,6 +59,8 @@ class PhraseRecorder:
                     if level >= self.threshold:
                         speaking = True
                         recorded.extend(pre_roll)
+                        if on_speech_start is not None:
+                            on_speech_start()
                 else:
                     recorded.append(chunk)
                     quiet = quiet + 1 if level < self.threshold else 0

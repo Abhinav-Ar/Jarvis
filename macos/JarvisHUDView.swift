@@ -6,6 +6,7 @@ final class JarvisHUDView: NSView {
     var detail = ""
     var goal = ""
     var steps: [String] = []
+    var messages: [[String: String]] = []
     var eventCount = 0
     private var phase: CGFloat = 0
     private var animationTimer: Timer?
@@ -58,6 +59,12 @@ final class JarvisHUDView: NSView {
         return value.replacingOccurrences(of: "\n", with: " ")
     }
 
+    private func cleanMessage(_ value: String) -> String {
+        value.replacingOccurrences(of: "**", with: "")
+            .replacingOccurrences(of: "`", with: "")
+            .replacingOccurrences(of: "\n", with: " ")
+    }
+
     private func rounded(_ rect: NSRect, radius: CGFloat, fill: NSColor, stroke: NSColor) {
         let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
         fill.setFill(); path.fill()
@@ -89,7 +96,7 @@ final class JarvisHUDView: NSView {
         a.withAlphaComponent(0.8).setStroke(); corner.lineWidth = 2; corner.stroke()
 
         // Central command core.
-        let core = NSPoint(x: bounds.midX, y: bounds.midY + 70)
+        let core = NSPoint(x: bounds.width * 0.67, y: bounds.midY + 45)
         for index in 0..<3 {
             let radius = CGFloat(72 + index * 22) + sin(phase * 2 + CGFloat(index)) * 4
             let ring = NSBezierPath()
@@ -99,12 +106,38 @@ final class JarvisHUDView: NSView {
         let pulse = NSBezierPath(ovalIn: NSRect(x: core.x - 18, y: core.y - 18, width: 36, height: 36))
         a.withAlphaComponent(0.55 + 0.25 * sin(phase * 3)).setFill(); pulse.fill()
 
-        // Command header.
-        let header = NSRect(x: 56, y: bounds.height - 154, width: bounds.width - 112, height: 96)
-        rounded(header, radius: 12, fill: NSColor.black.withAlphaComponent(0.72), stroke: a.withAlphaComponent(0.8))
-        text("JARVIS // ACTIVE TASK", at: NSPoint(x: header.minX + 24, y: header.maxY - 29), size: 12, color: a, weight: .bold)
-        let shownGoal = cleanGoal(goal.isEmpty ? detail : goal)
-        textBlock(String(shownGoal.prefix(180)), in: NSRect(x: header.minX + 24, y: header.minY + 13, width: header.width - 48, height: 43), size: 15, color: .white, weight: .medium)
+        // Orbiting telemetry particles.
+        for index in 0..<28 {
+            let angle = phase * (0.35 + CGFloat(index % 4) * 0.08) + CGFloat(index) * 0.61
+            let radius = CGFloat(125 + (index % 7) * 18)
+            let point = NSPoint(x: core.x + cos(angle) * radius, y: core.y + sin(angle) * radius * 0.58)
+            let dot = NSBezierPath(ovalIn: NSRect(x: point.x - 1.5, y: point.y - 1.5, width: 3, height: 3))
+            a.withAlphaComponent(0.22 + CGFloat(index % 4) * 0.12).setFill(); dot.fill()
+        }
+
+        // Bounded live conversation panel.
+        let chatWidth = min(780, max(520, bounds.width * 0.52))
+        let chatPanel = NSRect(x: 56, y: bounds.height - 344, width: chatWidth, height: 286)
+        rounded(chatPanel, radius: 16, fill: NSColor.black.withAlphaComponent(0.76), stroke: a.withAlphaComponent(0.8))
+        text("JARVIS // LIVE CONVERSATION", at: NSPoint(x: chatPanel.minX + 22, y: chatPanel.maxY - 31), size: 12, color: a, weight: .bold)
+        text(label.uppercased(), at: NSPoint(x: chatPanel.maxX - 145, y: chatPanel.maxY - 31), size: 11, color: a, weight: .bold)
+        let visibleMessages = Array(messages.suffix(4))
+        for (index, message) in visibleMessages.enumerated() {
+            let role = message["role"] ?? "assistant"
+            let isUser = role == "user"
+            let rowY = chatPanel.maxY - 82 - CGFloat(index * 54)
+            let bubbleX = isUser ? chatPanel.minX + 120 : chatPanel.minX + 22
+            let bubbleWidth = chatPanel.width - 142
+            let bubble = NSRect(x: bubbleX, y: rowY - 26, width: bubbleWidth, height: 44)
+            rounded(bubble, radius: 10, fill: (isUser ? NSColor.systemBlue : a).withAlphaComponent(0.18), stroke: (isUser ? NSColor.systemBlue : a).withAlphaComponent(0.48))
+            text(isUser ? "YOU" : "JARVIS", at: NSPoint(x: isUser ? chatPanel.minX + 70 : chatPanel.maxX - 87, y: rowY - 3), size: 9, color: isUser ? .systemBlue : a, weight: .bold)
+            let messageText = cleanMessage(message["text"] ?? "")
+            textBlock(String(messageText.prefix(190)), in: NSRect(x: bubble.minX + 12, y: bubble.minY + 7, width: bubble.width - 24, height: bubble.height - 12), size: 11, color: .white)
+        }
+        if visibleMessages.isEmpty {
+            let waiting = cleanGoal(goal.isEmpty ? "Say what you need. I’m listening." : goal)
+            textBlock(String(waiting.prefix(180)), in: NSRect(x: chatPanel.minX + 24, y: chatPanel.midY - 25, width: chatPanel.width - 48, height: 55), size: 14, color: NSColor.white.withAlphaComponent(0.75), weight: .medium)
+        }
 
         // Live action console.
         let console = NSRect(x: 56, y: 70, width: min(460, bounds.width * 0.34), height: 220)
@@ -129,5 +162,18 @@ final class JarvisHUDView: NSView {
         let scanY = bounds.height * (0.15 + 0.7 * ((sin(phase * 0.45) + 1) / 2))
         let scan = NSBezierPath(); scan.move(to: NSPoint(x: 30, y: scanY)); scan.line(to: NSPoint(x: bounds.width - 30, y: scanY))
         a.withAlphaComponent(0.18).setStroke(); scan.lineWidth = 1; scan.stroke()
+
+        // Animated signal waveform.
+        let wave = NSBezierPath()
+        let waveStart = bounds.width * 0.40
+        let waveEnd = bounds.width - 70
+        var wx = waveStart
+        while wx <= waveEnd {
+            let amplitude = 8 + 7 * sin(phase * 1.3)
+            let wy = 48 + sin((wx - waveStart) * 0.045 + phase * 5) * amplitude * sin((wx - waveStart) * 0.012)
+            if wx == waveStart { wave.move(to: NSPoint(x: wx, y: wy)) } else { wave.line(to: NSPoint(x: wx, y: wy)) }
+            wx += 4
+        }
+        a.withAlphaComponent(0.55).setStroke(); wave.lineWidth = 1.4; wave.stroke()
     }
 }

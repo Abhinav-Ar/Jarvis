@@ -11,6 +11,7 @@ from pathlib import Path
 
 RUNTIME = Path(os.getenv("JARVIS_RUNTIME_DIR", Path.home() / "Library/Application Support/Jarvis/.runtime"))
 STATE_FILE = RUNTIME / "activity.json"
+CHAT_FILE = RUNTIME / "chat.json"
 
 
 def update(state: str, label: str, detail: str = "") -> None:
@@ -23,6 +24,28 @@ def update(state: str, label: str, detail: str = "") -> None:
         )
         temporary.replace(STATE_FILE)
     except OSError:
+        pass
+
+
+def reset_ui() -> None:
+    try:
+        RUNTIME.mkdir(parents=True, exist_ok=True)
+        CHAT_FILE.write_text("[]", encoding="utf-8")
+        (RUNTIME / "active-task.json").unlink(missing_ok=True)
+        (RUNTIME / "hud-preview").unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def append_chat(role: str, text: str) -> None:
+    if not text.strip():
+        return
+    try:
+        RUNTIME.mkdir(parents=True, exist_ok=True)
+        messages = json.loads(CHAT_FILE.read_text(encoding="utf-8")) if CHAT_FILE.exists() else []
+        messages.append({"role": role, "text": text.strip(), "time": time.time()})
+        CHAT_FILE.write_text(json.dumps(messages[-12:]), encoding="utf-8")
+    except (OSError, ValueError, TypeError):
         pass
 
 

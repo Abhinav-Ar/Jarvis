@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var disabledFlag = appDirectory.appendingPathComponent(".runtime/desktop-control-disabled")
     private lazy var activityFile = appDirectory.appendingPathComponent(".runtime/activity.json")
     private lazy var previewFlag = appDirectory.appendingPathComponent(".runtime/hud-preview")
+    private lazy var chatFile = appDirectory.appendingPathComponent(".runtime/chat.json")
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
     private var detailMenuItem: NSMenuItem!
@@ -191,6 +192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var goal = ""
         var steps: [String] = []
         var events = 0
+        var messages: [[String: String]] = []
         let taskFile = appDirectory.appendingPathComponent(".runtime/active-task.json")
         if let data = try? Data(contentsOf: taskFile),
            let task = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -200,12 +202,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             events = (task["events"] as? [[String: Any]])?.count ?? 0
         }
+        if let data = try? Data(contentsOf: chatFile),
+           let chat = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            messages = chat.compactMap { item in
+                guard let role = item["role"] as? String, let text = item["text"] as? String else { return nil }
+                return ["role": role, "text": text]
+            }
+        }
         hudView?.state = state
         hudView?.label = label
         hudView?.detail = detail
         hudView?.goal = goal
         hudView?.steps = steps
         hudView?.eventCount = events
+        hudView?.messages = messages
         hudView?.needsDisplay = true
         let frame = targetScreen().visibleFrame
         hud?.setFrame(frame, display: true)

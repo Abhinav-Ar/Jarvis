@@ -92,6 +92,7 @@ def main() -> int:
 
     print("Starting Jarvis…", flush=True)
     start_desktop_control()
+    activity.reset_ui()
     from assist import JarvisAssistant
     assistant = JarvisAssistant()
     recorder = None
@@ -120,10 +121,12 @@ def main() -> int:
                 else:
                     print(f"Listening for ‘{hotword}’…")
                     activity.update("session" if session_active else "listening", "Ready" if session_active else "Listening")
-                    audio_path = recorder.listen()
+                    audio_path = recorder.listen(
+                        on_speech_start=lambda: activity.update("transcribing", "Hearing…", "Capturing your voice")
+                    )
                 try:
                     print("Transcribing…", flush=True)
-                    activity.update("transcribing" if session_active else "listening", "Hearing…" if session_active else "Listening")
+                    activity.update("transcribing", "Hearing…", "Turning speech into text")
                     transcription_started = time.perf_counter()
                     text = assistant.transcribe(audio_path)
                     transcription_seconds = time.perf_counter() - transcription_started
@@ -152,6 +155,7 @@ def main() -> int:
                 activity.update("session", "Jarvis online", "Conversation active")
                 text = strip_wake_word(text, hotword)
             if not text:
+                activity.append_chat("assistant", "How can I help?")
                 assistant.speak("How can I help?")
                 activity.update("session", "Ready", "Listening for your request")
                 continue
@@ -164,12 +168,16 @@ def main() -> int:
                 break
 
             if is_satisfied_command(text):
+                activity.append_chat("user", text)
+                activity.append_chat("assistant", "I’m glad I could help.")
                 assistant.speak("I’m glad I could help.")
                 assistant.reset_session()
                 session_active = False
                 activity.update("listening", "Listening")
                 activity.cue("complete")
                 continue
+
+            activity.append_chat("user", text)
 
             prompt = f"Local time: {datetime.now().astimezone().isoformat(timespec='minutes')}\nUser: {text}"
             if not wake_detected:
@@ -182,6 +190,7 @@ def main() -> int:
             reply = fast_commands.execute(text) or assistant.ask(prompt)
             thinking_seconds = time.perf_counter() - thinking_started
             print(f"Jarvis ({thinking_seconds:.1f}s thinking): {reply}")
+            activity.append_chat("assistant", reply)
             speaking_started = time.perf_counter()
             activity.update("speaking", "Responding…")
             voice_start_seconds, interrupted, interruption_audio = assistant.speak(
@@ -211,6 +220,7 @@ def main() -> int:
             activity.cue("error")
             print(f"Jarvis error: {exc}", file=sys.stderr)
             fallback = "I ran into a problem before I could verify the task. I’ve stopped safely instead of pretending it finished."
+            activity.append_chat("assistant", fallback)
             try:
                 assistant.speak(fallback, allow_barge_in=not args.text)
             except Exception as speech_error:

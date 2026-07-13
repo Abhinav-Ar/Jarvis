@@ -31,9 +31,13 @@ case "screenshot":
                 onScreenWindowsOnly: true
             )
             guard !content.displays.isEmpty else { fail("No display is available") }
+            let overlayWindows = content.windows.filter { window in
+                guard let owner = window.owningApplication else { return false }
+                return owner.bundleIdentifier == "com.jarvis.menu" || owner.applicationName == "JarvisMenu"
+            }
             var captures: [(SCDisplay, CGImage)] = []
             for display in content.displays {
-                let filter = SCContentFilter(display: display, excludingWindows: [])
+                let filter = SCContentFilter(display: display, excludingWindows: overlayWindows)
                 let configuration = SCStreamConfiguration()
                 configuration.width = display.width
                 configuration.height = display.height

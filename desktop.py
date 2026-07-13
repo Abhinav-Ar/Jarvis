@@ -6,11 +6,9 @@ import base64
 import os
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 
 from openai import OpenAI
-import activity
 
 
 RUNTIME_DIR = Path.home() / "Library" / "Application Support" / "Jarvis" / ".runtime"
@@ -28,8 +26,6 @@ HELPER = (
 def inspect_screen(question: str) -> dict:
     path = Path(tempfile.gettempdir()) / "jarvis-screen.png"
     try:
-        activity.update("observing", "Looking…", "Reading the desktop")
-        time.sleep(0.6)  # Let the click-through HUD hide before capture.
         if not HELPER.exists():
             return {"ok": False, "error": "The desktop helper is not installed."}
         capture = subprocess.run(

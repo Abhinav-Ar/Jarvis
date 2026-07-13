@@ -15,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        // Desktop control is session-scoped and starts disabled after login.
+        try? FileManager.default.removeItem(at: controlFlag)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.toolTip = "Jarvis voice assistant"
 
@@ -66,9 +68,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func refreshStatus() {
         let running = isRunning()
-        let desktopEnabled = FileManager.default.fileExists(atPath: controlFlag.path)
+        if !running {
+            try? FileManager.default.removeItem(at: controlFlag)
+        }
+        let desktopEnabled = running && FileManager.default.fileExists(atPath: controlFlag.path)
         let menuColor: NSColor = running ? .systemGreen : .systemRed
-        let barColor: NSColor = desktopEnabled ? .systemOrange : (running ? .systemCyan : .systemRed)
+        let barColor: NSColor = running ? .systemCyan : .systemRed
         statusMenuItem.attributedTitle = NSAttributedString(
             string: running ? "● Status: Listening" : "● Status: Stopped",
             attributes: [
@@ -77,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ]
         )
         statusItem.button?.attributedTitle = NSAttributedString(
-            string: desktopEnabled ? "● Jarvis ⚠︎" : "● Jarvis",
+            string: "● Jarvis",
             attributes: [
                 .foregroundColor: barColor,
                 .font: NSFont.boldSystemFont(ofSize: NSFont.systemFontSize),
@@ -100,6 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func stopJarvis() {
+        try? FileManager.default.removeItem(at: controlFlag)
         _ = launchctl(["bootout", service])
         refreshStatus()
     }

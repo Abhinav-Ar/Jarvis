@@ -7,6 +7,7 @@ import os
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -28,6 +29,12 @@ def request_is_active(text: str, *, text_mode: bool, no_hotword: bool, follow_up
 def is_logoff_command(text: str) -> bool:
     normalized = " ".join(text.lower().strip(" ,.?!").split())
     return normalized in {"log off", "log out", "logout", "go offline", "shut down jarvis"}
+
+
+def reset_desktop_control() -> None:
+    """Desktop control never survives a Jarvis voice session."""
+    flag = Path.home() / "Library/Application Support/Jarvis/.runtime/desktop-control-enabled"
+    flag.unlink(missing_ok=True)
 
 
 def main() -> int:
@@ -102,6 +109,7 @@ def main() -> int:
                 continue
 
             if is_logoff_command(text):
+                reset_desktop_control()
                 print("Jarvis: Logging off.")
                 assistant.speak("Logging off.")
                 break

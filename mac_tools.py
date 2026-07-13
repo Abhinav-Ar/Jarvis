@@ -5,6 +5,7 @@ from __future__ import annotations
 import platform
 import subprocess
 from datetime import datetime
+from urllib.parse import urlparse
 
 import psutil
 
@@ -20,7 +21,34 @@ def _apple(script: str, *args: str) -> str:
 
 def open_application(name: str) -> dict:
     subprocess.run(["/usr/bin/open", "-a", name], check=True, timeout=20)
-    return {"ok": True, "application": name}
+    script = """on run argv
+set appName to item 1 of argv
+tell application "System Events"
+  repeat 20 times
+    if exists (first application process whose name is appName) then
+      set frontmost of (first application process whose name is appName) to true
+      return "frontmost"
+    end if
+    delay 0.1
+  end repeat
+end tell
+return "opened"
+end run"""
+    status = _apple(script, name)
+    return {"ok": True, "application": name, "frontmost": status == "frontmost"}
+
+
+def open_url(url: str, browser: str = "Safari") -> dict:
+    """Navigate a browser semantically instead of typing into its UI."""
+    url = url.strip()
+    if "://" not in url:
+        url = f"https://{url}"
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return {"ok": False, "error": "Only valid http and https URLs are allowed."}
+    subprocess.run(["/usr/bin/open", "-a", browser, url], check=True, timeout=20)
+    activation = open_application(browser)
+    return {"ok": True, "url": url, "browser": browser, "frontmost": activation["frontmost"]}
 
 
 def set_system_volume(level: int) -> dict:

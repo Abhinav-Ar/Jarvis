@@ -23,13 +23,14 @@ class ToolTests(unittest.TestCase):
             spotify_control=lambda **kwargs: {},
         ):
             handler_names = {
-                "get_weather", "open_search", "spotify_control", "open_application",
+                "get_weather", "open_search", "spotify_control", "open_application", "browser_navigate",
                 "set_system_volume", "clipboard", "system_status", "show_notification",
                 "create_reminder", "create_note", "create_calendar_event",
                 "todoist_create_task", "home_assistant_control", "create_email_draft",
                 "find_contact", "find_files", "apple_shortcuts",
                 "spotify_play_playlist", "spotify_create_discovery_playlist",
                 "desktop_inspect", "desktop_action",
+                "git_repositories", "git_status", "git_commit_and_push",
             }
         self.assertEqual(function_names, handler_names)
 

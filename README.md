@@ -12,6 +12,10 @@ tools when requested, and speaks the result through the Mac's audio output.
 - Current web research through OpenAI web search
 - Weather for any named location through Open-Meteo
 - Open web or image searches in the default browser
+- Inspect local Git changes, form a meaningful commit message, commit, and push
+  when the user explicitly requests the complete operation
+- Plan multi-step goals, insert safe prerequisites, journal tool evidence, recover
+  from failed steps, and audit success criteria before reporting completion
 - Spoken responses through OpenAI text-to-speech
 
 ### Mac control
@@ -121,8 +125,9 @@ The Jarvis menu provides direct shortcuts to the Screen Recording and
 Accessibility panes. Add `~/Applications/Jarvis Menu.app` or enable
 **Jarvis Menu** in both lists, then restart it
 from the login service if macOS requests a restart. Desktop control remains off
-until you explicitly choose **Enable Desktop Control**; the menu label turns
-orange and displays a warning symbol while control is active.
+until you explicitly choose **Enable Desktop Control**. It automatically resets
+to off when Jarvis stops, logs off, or begins a new login session. Desktop control
+does not change the menu color: cyan means listening and red means stopped.
 
 ## Run
 
@@ -153,7 +158,7 @@ update the deployed copy.
 
 Installation also builds an ad-hoc-signed native Swift menu-bar controller at
 `~/Applications/Jarvis Menu.app`. A
-green `● Jarvis` means it is listening; gray means it is stopped. Its menu offers
+cyan `● Jarvis` means it is listening; red means it is stopped. Its menu offers
 Start, Stop, Restart, current status, recent logs, and the runtime folder. Stop
 unloads the voice service until Start is selected; it does not auto-restart. The
 controller itself intentionally has no Quit option and is automatically restored
@@ -183,9 +188,10 @@ Remove the login service without deleting Jarvis or its logs:
 ./uninstall-background.sh
 ```
 
-This is the background-service foundation, not yet the final signed menu-bar app
-or local neural wake-word engine. macOS must be awake and the user logged in for
-microphone access.
+This is a local background assistant with a native menu controller. macOS must be
+awake and the user logged in for microphone and desktop access. Web addresses are
+opened through direct browser navigation; screen inspection and coordinate-based
+actions are reserved as fallbacks for apps without a structured integration.
 
 Say “Jarvis” followed by a request. Press Control-C to stop.
 Say “Jarvis, log off” to end the assistant cleanly without using Control-C.

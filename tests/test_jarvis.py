@@ -1,6 +1,9 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
-from jarvis import is_logoff_command, request_is_active
+from jarvis import is_logoff_command, request_is_active, reset_desktop_control
 
 
 class RequestActivationTests(unittest.TestCase):
@@ -30,6 +33,14 @@ class RequestActivationTests(unittest.TestCase):
                 hotword="jarvis",
             )
         )
+
+    def test_logoff_clears_desktop_control(self):
+        with TemporaryDirectory() as home, patch.object(Path, "home", return_value=Path(home)):
+            flag = Path(home) / "Library/Application Support/Jarvis/.runtime/desktop-control-enabled"
+            flag.parent.mkdir(parents=True)
+            flag.touch()
+            reset_desktop_control()
+            self.assertFalse(flag.exists())
 
 
 if __name__ == "__main__":

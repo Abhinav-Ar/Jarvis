@@ -11,6 +11,7 @@ import requests
 import integrations
 import mac_tools
 import desktop
+import git_tools
 
 
 TOOL_DEFINITIONS = [
@@ -87,11 +88,26 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "name": "open_application",
-        "description": "Open an installed macOS application by name.",
+        "description": "Open an installed macOS application and bring it to the foreground.",
         "parameters": {
             "type": "object",
             "properties": {"name": {"type": "string"}},
             "required": ["name"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "browser_navigate",
+        "description": "Open a website directly in a Mac browser and bring the browser forward. Prefer this over desktop clicking or typing for URLs.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string"},
+                "browser": {"type": "string"},
+            },
+            "required": ["url", "browser"],
             "additionalProperties": False,
         },
         "strict": True,
@@ -280,6 +296,41 @@ TOOL_DEFINITIONS = [
     },
     {
         "type": "function",
+        "name": "git_repositories",
+        "description": "List local Git repositories and how many changed files each has. Use this to identify the intended repository instead of guessing from a GUI.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "git_status",
+        "description": "Inspect a repository's branch, changed files, and diff summary before forming a commit message.",
+        "parameters": {
+            "type": "object",
+            "properties": {"repository": {"type": "string"}},
+            "required": ["repository"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "git_commit_and_push",
+        "description": "Stage all changes, create a commit with a meaningful non-empty message, and push it. Set confirmed true only when the user explicitly requested both commit and push. Inspect Git status first.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "repository": {"type": "string"},
+                "message": {"type": "string"},
+                "confirmed": {"type": "boolean"},
+            },
+            "required": ["repository", "message", "confirmed"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
         "name": "desktop_action",
         "description": "Perform one bounded Mac input action after screen inspection. Desktop control must be visibly enabled in the menu. Never interact with passwords, authentication codes, payment data, purchases, deletions, messages, or final form submission without explicit confirmation. Coordinates use screenshot pixels.",
         "parameters": {
@@ -371,6 +422,7 @@ def execute(name: str, arguments: dict) -> dict:
         "spotify_play_playlist": spotify_play_playlist,
         "spotify_create_discovery_playlist": spotify_create_discovery_playlist,
         "open_application": mac_tools.open_application,
+        "browser_navigate": mac_tools.open_url,
         "set_system_volume": mac_tools.set_system_volume,
         "clipboard": mac_tools.clipboard,
         "system_status": mac_tools.system_status,
@@ -386,6 +438,9 @@ def execute(name: str, arguments: dict) -> dict:
         "apple_shortcuts": mac_tools.shortcuts,
         "desktop_inspect": desktop.inspect_screen,
         "desktop_action": desktop.perform_action,
+        "git_repositories": git_tools.repositories,
+        "git_status": git_tools.status,
+        "git_commit_and_push": git_tools.commit_and_push,
     }
     if name not in handlers:
         return {"ok": False, "error": f"Unknown tool: {name}"}

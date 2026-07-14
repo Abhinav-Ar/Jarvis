@@ -12,6 +12,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+import diagnostics
 
 
 RUNTIME = Path(os.getenv("JARVIS_RUNTIME_DIR", Path.cwd() / ".runtime"))
@@ -72,9 +73,23 @@ class AgentPlatform:
                     start_state TEXT NOT NULL, end_state TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL, started REAL NOT NULL, updated REAL NOT NULL, ended REAL
                 );
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id TEXT PRIMARY KEY, request TEXT NOT NULL, goal TEXT NOT NULL,
+                    workflow TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
+                    result_summary TEXT NOT NULL DEFAULT '', error_code TEXT NOT NULL DEFAULT '',
+                    created REAL NOT NULL, updated REAL NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS task_events (
+                    id INTEGER PRIMARY KEY, task_id TEXT NOT NULL, step INTEGER NOT NULL,
+                    action TEXT NOT NULL, status TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '',
+                    evidence TEXT NOT NULL DEFAULT '{}', created REAL NOT NULL,
+                    FOREIGN KEY(task_id) REFERENCES tasks(id)
+                );
                 CREATE INDEX IF NOT EXISTS idx_jobs_ready ON jobs(status, run_after);
                 CREATE INDEX IF NOT EXISTS idx_cloud_created ON cloud_usage(created);
                 CREATE INDEX IF NOT EXISTS idx_project_active ON project_sessions(status, updated);
+                CREATE INDEX IF NOT EXISTS idx_tasks_updated ON tasks(updated DESC);
+                CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(task_id, id);
             """)
         self.write_status()
 
@@ -149,7 +164,7 @@ class AgentPlatform:
         """Small local retrieval packet; never sends the entire database."""
         words = list(dict.fromkeys(re.findall(r"[a-z0-9_-]{4,}", request.lower())))[:8]
         if not words:
-            return {"memories": [], "documents": []}
+            return {"memories": [], "documents": [], "tasks": []}
         clauses = " OR ".join(["lower(key) LIKE ? OR lower(value) LIKE ?"] * len(words))
         parameters = [f"%{word}%" for word in words for _ in (0, 1)]
         document_clauses = " OR ".join(["lower(title) LIKE ? OR lower(content) LIKE ?"] * len(words))
@@ -162,7 +177,25 @@ class AgentPlatform:
                 f"SELECT path,title,substr(content,1,240) AS excerpt FROM documents WHERE {document_clauses} "
                 "ORDER BY modified DESC LIMIT ?", (*parameters, limit),
             ).fetchall()
-        return {"memories": [dict(row) for row in memories], "documents": [dict(row) for row in documents]}
+            tasks = []
+            if any(marker in request.lower() for marker in ("what happened", "problem", "failed", "failure", "last task", "previous task", "logs")):
+                task_rows = db.execute(
+                    "SELECT id,request,goal,status,result_summary,error_code,updated FROM tasks "
+                    "ORDER BY updated DESC LIMIT 3"
+                ).fetchall()
+                for task in task_rows:
+                    item = dict(task)
+                    event = db.execute(
+                        "SELECT action,status,detail,evidence FROM task_events WHERE task_id=? ORDER BY id DESC LIMIT 1",
+                        (item["id"],),
+                    ).fetchone()
+                    item["last_event"] = dict(event) if event else {}
+                    tasks.append(item)
+        return {
+            "memories": [dict(row) for row in memories],
+            "documents": [dict(row) for row in documents],
+            "tasks": tasks,
+        }
 
     def save_workflow(self, name: str, steps: list[dict[str, Any]]) -> dict:
         if not name.strip() or not steps:
@@ -185,6 +218,65 @@ class AgentPlatform:
             )
         self.write_status()
         return {"ok": True, "job_id": cursor.lastrowid, "status": "queued"}
+
+    def begin_task(self, task_id: str, request: str, goal: str, workflow: str = "") -> dict:
+        now = time.time()
+        request = str(diagnostics.redact(request))
+        goal = str(diagnostics.redact(goal))
+        with _lock, self._connect() as db:
+            db.execute(
+                "INSERT INTO tasks(id,request,goal,workflow,status,created,updated) VALUES(?,?,?,?,?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET request=excluded.request,goal=excluded.goal,"
+                "workflow=excluded.workflow,status=excluded.status,updated=excluded.updated",
+                (task_id, request[:4000], goal[:4000], workflow[:100], "planned", now, now),
+            )
+        return {"ok": True, "task_id": task_id}
+
+    def record_task_event(
+        self, task_id: str, step: int, action: str, status: str,
+        detail: str = "", evidence: dict[str, Any] | None = None,
+    ) -> dict:
+        safe_evidence = json.dumps(diagnostics.redact(evidence or {}), default=str)[:12000]
+        detail = str(diagnostics.redact(detail))
+        with _lock, self._connect() as db:
+            cursor = db.execute(
+                "INSERT INTO task_events(task_id,step,action,status,detail,evidence,created) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (task_id, int(step), action[:100], status[:40], detail[:2000], safe_evidence, time.time()),
+            )
+            db.execute("UPDATE tasks SET status=?,updated=? WHERE id=?", ("executing", time.time(), task_id))
+        return {"ok": True, "event_id": cursor.lastrowid}
+
+    def finish_task(self, task_id: str, status: str, summary: str = "", error_code: str = "") -> dict:
+        with _lock, self._connect() as db:
+            cursor = db.execute(
+                "UPDATE tasks SET status=?,result_summary=?,error_code=?,updated=? WHERE id=?",
+                (status[:40], summary[:4000], error_code[:100], time.time(), task_id),
+            )
+        self.write_status()
+        return {"ok": bool(cursor.rowcount), "task_id": task_id, "status": status}
+
+    def recent_tasks(self, limit: int = 5, query: str = "") -> dict:
+        limit = max(1, min(int(limit), 20))
+        with _lock, self._connect() as db:
+            if query.strip():
+                pattern = f"%{query.strip()}%"
+                rows = db.execute(
+                    "SELECT * FROM tasks WHERE request LIKE ? OR goal LIKE ? OR result_summary LIKE ? "
+                    "ORDER BY updated DESC LIMIT ?", (pattern, pattern, pattern, limit),
+                ).fetchall()
+            else:
+                rows = db.execute("SELECT * FROM tasks ORDER BY updated DESC LIMIT ?", (limit,)).fetchall()
+            tasks = []
+            for row in rows:
+                item = dict(row)
+                events = db.execute(
+                    "SELECT step,action,status,detail,evidence,created FROM task_events "
+                    "WHERE task_id=? ORDER BY id", (item["id"],),
+                ).fetchall()
+                item["events"] = [dict(event) for event in events]
+                tasks.append(item)
+        return {"ok": True, "tasks": tasks}
 
     def start_project_session(self, repository: str, path: str, branch: str, commit: str, state: dict) -> dict:
         now = time.time()
@@ -266,8 +358,13 @@ class AgentPlatform:
 
     @staticmethod
     def risk_for(tool: str) -> str:
-        if tool in {"create_email_draft", "git_commit", "git_commit_and_push", "desktop_action"}:
+        if tool in {
+            "create_email_draft", "git_commit", "git_commit_and_push", "git_push",
+            "desktop_action", "desktop_accessibility_set", "desktop_accessibility_press",
+        }:
             return "consequential"
+        if tool in {"desktop_window_arrange", "desktop_window_restore"}:
+            return "reversible"
         if tool.startswith(("create_", "todoist_", "home_assistant_", "quit_", "spotify_create_")):
             return "reversible"
         return "read_only"
@@ -279,6 +376,7 @@ class AgentPlatform:
                 "documents": db.execute("SELECT COUNT(*) FROM documents").fetchone()[0],
                 "workflows": db.execute("SELECT COUNT(*) FROM workflows WHERE enabled=1").fetchone()[0],
                 "queued_jobs": db.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0],
+                "task_history": db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0],
                 "capabilities": db.execute("SELECT COUNT(*) FROM capabilities WHERE available=1").fetchone()[0],
                 "cloud_calls_24h": db.execute(
                     "SELECT COUNT(*) FROM cloud_usage WHERE created >= ?", (time.time() - 86400,)

@@ -11,8 +11,19 @@ class MacToolTests(unittest.TestCase):
         result = mac_tools.open_application("Safari")
         self.assertTrue(result["ok"])
         self.assertTrue(result["frontmost"])
-        run.assert_called_once_with(["/usr/bin/open", "-a", "Safari"], check=True, timeout=20)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[0].args[0], ["/usr/bin/open", "-a", "Safari"])
         apple.assert_called_once()
+
+    @patch("mac_tools.time.sleep")
+    @patch("mac_tools._apple", side_effect=["0", "false", "frontmost"])
+    @patch("mac_tools.subprocess.run")
+    def test_github_desktop_without_window_is_relaunched(self, run, apple, sleep):
+        result = mac_tools.open_application("GitHub Desktop")
+        self.assertTrue(result["frontmost"])
+        self.assertEqual(run.call_count, 4)
+        self.assertIn("quit()", run.call_args_list[2].args[0][4])
+        self.assertEqual(run.call_args_list[3].args[0], ["/usr/bin/open", "-a", "GitHub Desktop"])
 
     @patch("mac_tools.open_application", return_value={"ok": True, "frontmost": True})
     @patch("mac_tools.subprocess.run")

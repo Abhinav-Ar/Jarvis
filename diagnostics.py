@@ -33,6 +33,11 @@ def _redact(value: Any, key: str = "") -> Any:
     return str(value)[:500]
 
 
+def redact(value: Any) -> Any:
+    """Public redaction helper for other persistent local journals."""
+    return _redact(value)
+
+
 def _rotate() -> None:
     if not EVENT_FILE.exists() or EVENT_FILE.stat().st_size < MAX_BYTES:
         return

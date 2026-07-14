@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import platform
 import subprocess
+import time
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -15,6 +16,11 @@ APP_ALIASES = {
     "github": "GitHub Desktop", "github desktop": "GitHub Desktop",
     "code": "Visual Studio Code", "vs code": "Visual Studio Code",
     "vscode": "Visual Studio Code", "finder": "Finder",
+}
+
+APP_PROCESS_NAMES = {
+    "Visual Studio Code": ["Visual Studio Code", "Code"],
+    "Google Chrome": ["Google Chrome", "Chrome"],
 }
 
 
@@ -43,20 +49,61 @@ def _apple(script: str, *args: str) -> str:
 def open_application(name: str) -> dict:
     name = canonical_application_name(name)
     subprocess.run(["/usr/bin/open", "-a", name], check=True, timeout=20)
+    # The process can be alive with every window closed. A standard reopen event
+    # restores its normal window without launching a duplicate instance.
+    subprocess.run(
+        [
+            "/usr/bin/osascript", "-l", "JavaScript", "-e",
+            "function run(argv) { const app = Application(argv[0]); app.reopen(); app.activate(); }", name,
+        ],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    if name == "GitHub Desktop":
+        window_count = _apple(
+            "on run argv\ntell application \"System Events\" to tell process (item 1 of argv) to return count of windows\nend run",
+            name,
+        )
+        if window_count.strip() == "0":
+            # GitHub Desktop can remain alive after its last window is closed and
+            # ignores the standard reopen event. It has no unsaved editor state,
+            # so a normal quit/relaunch is the bounded repair for an explicit
+            # request to open or operate it.
+            subprocess.run(
+                ["/usr/bin/osascript", "-l", "JavaScript", "-e", "Application('GitHub Desktop').quit()"],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            stopped = False
+            for _ in range(20):
+                running = _apple(
+                    "on run argv\ntell application \"System Events\" to return exists (first application process whose name is item 1 of argv)\nend run",
+                    name,
+                )
+                if running.strip().lower() == "false":
+                    stopped = True
+                    break
+                time.sleep(0.25)
+            if not stopped:
+                return {
+                    "ok": False, "application": name, "frontmost": False,
+                    "error_code": "application_window_unavailable", "retryable": True,
+                    "error": "GitHub Desktop is running without a window and did not exit cleanly for relaunch.",
+                }
+            subprocess.run(["/usr/bin/open", "-a", name], check=True, timeout=20)
     script = """on run argv
-set appName to item 1 of argv
 tell application "System Events"
   repeat 20 times
-    if exists (first application process whose name is appName) then
-      set frontmost of (first application process whose name is appName) to true
-      return "frontmost"
-    end if
+    repeat with appName in argv
+      if exists (first application process whose name is appName) then
+        set frontmost of (first application process whose name is appName) to true
+        return "frontmost"
+      end if
+    end repeat
     delay 0.1
   end repeat
 end tell
 return "opened"
 end run"""
-    status = _apple(script, name)
+    status = _apple(script, *APP_PROCESS_NAMES.get(name, [name]))
     return {"ok": True, "application": name, "frontmost": status == "frontmost"}
 
 
@@ -64,7 +111,7 @@ def quit_application(name: str) -> dict:
     """Request a normal macOS quit and verify the process actually exits."""
     name = canonical_application_name(name)
     if not name:
-        return {"ok": False, "error": "An application name is required."}
+        return {"ok": False, "error_code": "missing_application", "requires_user": True, "error": "An application name is required."}
     _run([
         "/usr/bin/osascript", "-l", "JavaScript", "-e",
         "function run(argv) { Application(argv[0]).quit(); return 'requested'; }", name,
@@ -86,6 +133,8 @@ end run"""
         "ok": False,
         "application": name,
         "closed": False,
+        "error_code": "unsaved_changes_dialog",
+        "requires_user": True,
         "error": f"{name} is still open, possibly because it is waiting for an unsaved-changes dialog.",
     }
 
@@ -103,7 +152,8 @@ def open_url(url: str, browser: str = "Safari") -> dict:
         url = f"https://{url}"
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return {"ok": False, "error": "Only valid http and https URLs are allowed."}
+        return {"ok": False, "error_code": "invalid_url", "requires_user": True, "error": "Only valid http and https URLs are allowed."}
+    browser = "Safari" if browser.strip().lower() in {"", "default", "the browser", "browser"} else canonical_application_name(browser)
     subprocess.run(["/usr/bin/open", "-a", browser, url], check=True, timeout=20)
     activation = open_application(browser)
     return {"ok": True, "url": url, "browser": browser, "frontmost": activation["frontmost"]}

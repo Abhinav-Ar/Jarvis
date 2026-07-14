@@ -16,7 +16,10 @@ RUNTIME = Path(os.getenv("JARVIS_RUNTIME_DIR", Path.home() / "Library/Applicatio
 STATE_FILE = RUNTIME / "activity.json"
 CHAT_FILE = RUNTIME / "chat.json"
 ACTION_FILE = RUNTIME / "actions.json"
+PLAN_FILE = RUNTIME / "ui-plan.json"
 _lock = threading.Lock()
+_announcement_lock = threading.Lock()
+_last_announcements: dict[str, float] = {}
 
 
 def update(state: str, label: str, detail: str = "") -> None:
@@ -37,6 +40,7 @@ def reset_ui() -> None:
         RUNTIME.mkdir(parents=True, exist_ok=True)
         CHAT_FILE.write_text("[]", encoding="utf-8")
         ACTION_FILE.write_text("[]", encoding="utf-8")
+        PLAN_FILE.write_text("{}", encoding="utf-8")
         (RUNTIME / "active-task.json").unlink(missing_ok=True)
         (RUNTIME / "hud-preview").unlink(missing_ok=True)
     except OSError:
@@ -52,6 +56,18 @@ def append_chat(role: str, text: str) -> None:
         messages.append({"role": role, "text": text.strip(), "time": time.time()})
         CHAT_FILE.write_text(json.dumps(messages[-12:]), encoding="utf-8")
     except (OSError, ValueError, TypeError):
+        pass
+
+
+def set_execution_path(goal: str, steps: list[str]) -> None:
+    """Publish a local workflow plan for the HUD without requiring a model plan."""
+    try:
+        RUNTIME.mkdir(parents=True, exist_ok=True)
+        PLAN_FILE.write_text(
+            json.dumps({"goal": goal, "steps": steps, "updated": time.time()}),
+            encoding="utf-8",
+        )
+    except OSError:
         pass
 
 
@@ -77,12 +93,14 @@ def describe_tool(name: str, arguments: dict) -> tuple[str, str]:
     elif name == "desktop_action":
         action = arguments.get("action", "action")
         target = f"{action} at ({arguments.get('x')}, {arguments.get('y')})" if action == "click" else str(action)
+    elif name in {"desktop_window_arrange", "desktop_window_restore"}:
+        target = ", ".join(arguments.get("applications", [])) or "application windows"
     elif name.startswith("spotify_"):
         target = str(arguments.get("name") or arguments.get("query") or arguments.get("action") or "Spotify")
     elif name == "get_weather":
         target = str(arguments.get("location", "current location"))
     else:
-        target = "authorized request"
+        target = str(arguments.get("target") or "authorized request")
     return label, target[:100]
 
 
@@ -97,6 +115,14 @@ def begin_action(name: str, arguments: dict) -> tuple[str, str]:
             ACTION_FILE.write_text(json.dumps(actions[-20:]))
         except (OSError, ValueError, TypeError):
             pass
+    milestone_speech = {
+        "desktop_inspect": "I’m checking the active screens now.",
+        "git_commit_and_push": "I’ve reached the Git operation. I’m committing, pushing, and then verifying it.",
+        "spotify_create_discovery_playlist": "I’m analyzing your recent listening before I build the playlist.",
+        "project_session_start": "I’m opening the project and rebuilding its working context.",
+    }
+    if name in milestone_speech:
+        announce(milestone_speech[name], key=f"tool:{name}")
     return action_id, f"{label.title()} — {target}"
 
 
@@ -111,11 +137,37 @@ def finish_action(action_id: str, result: dict) -> None:
                     if not result.get("ok"):
                         action["result"] = str(result.get("error", "Action failed"))[:120]
                     else:
-                        action["result"] = "Completed and verified"
+                        action["result"] = str(
+                            result.get("_activity_detail") or result.get("summary") or
+                            result.get("message") or "Completed and verified"
+                        )[:160]
                     break
             ACTION_FILE.write_text(json.dumps(actions[-20:]))
         except (OSError, ValueError, TypeError):
             pass
+
+
+def record_step(label: str, target: str, result: dict) -> None:
+    """Add deterministic workflow evidence to the same feed as model tools."""
+    action_id, _ = begin_action(label, {"target": target})
+    finish_action(action_id, {**result, "_activity_detail": target})
+
+
+def announce(message: str, key: str = "", minimum_interval: float = 8.0) -> None:
+    """Speak only meaningful milestones, with de-duplication to avoid chatter."""
+    if os.getenv("JARVIS_PROGRESS_SPEECH", "1") != "1" or not message.strip():
+        return
+    identity = key or message.lower().strip()
+    with _announcement_lock:
+        now = time.monotonic()
+        if now - _last_announcements.get(identity, 0.0) < minimum_interval:
+            return
+        _last_announcements[identity] = now
+    subprocess.Popen(
+        ["/usr/bin/say", message],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def cue(kind: str) -> None:

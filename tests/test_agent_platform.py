@@ -49,6 +49,21 @@ class AgentPlatformTests(unittest.TestCase):
         self.assertTrue(closed["ok"])
         self.assertIsNone(self.agent.active_project_session()["session"])
 
+    def test_task_failures_remain_searchable_after_later_tasks(self):
+        self.agent.begin_task("first", "push Jarvis", "Push Jarvis", "git")
+        self.agent.record_task_event(
+            "first", 1, "push", "failed", "GitHub denied access",
+            {"error_code": "remote_permission_denied"},
+        )
+        self.agent.finish_task("first", "needs_input", "GitHub rejected the push", "remote_permission_denied")
+        self.agent.begin_task("second", "open Safari", "Open Safari", "direct")
+        self.agent.finish_task("second", "completed", "Safari opened")
+        history = self.agent.recent_tasks(limit=5)["tasks"]
+        self.assertEqual([task["id"] for task in history[:2]], ["second", "first"])
+        failed = next(task for task in history if task["id"] == "first")
+        self.assertEqual(failed["error_code"], "remote_permission_denied")
+        self.assertEqual(failed["events"][0]["action"], "push")
+
 
 if __name__ == "__main__":
     unittest.main()

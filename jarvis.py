@@ -82,8 +82,19 @@ def start_desktop_control() -> None:
 
 def is_complex_request(text: str) -> bool:
     lowered = text.lower()
-    markers = (" and then ", "commit", "push", "fill out", "organize", "all of", "after that")
+    markers = (
+        " and then ", " then ", "commit", "push", "fill out", "organize",
+        "all of", "after that", "arrange", "tile", "side by side", "both apps",
+    )
     return any(marker in lowered for marker in markers)
+
+
+def restore_workspace() -> None:
+    try:
+        from desktop import restore_windows
+        restore_windows(confirmed=True)
+    except Exception as exc:
+        diagnostics.event("workspace_restore_failed", level="warning", error=str(exc))
 
 
 def main() -> int:
@@ -177,6 +188,7 @@ def main() -> int:
                 continue
 
             if is_logoff_command(text) and wake_detected:
+                restore_workspace()
                 activity.update("stopped", "Stopped")
                 stop_desktop_control()
                 print("Jarvis: Logging off.")
@@ -195,6 +207,7 @@ def main() -> int:
                 activity.append_chat("user", text)
                 activity.append_chat("assistant", "I’m glad I could help.")
                 assistant.speak("I’m glad I could help.")
+                restore_workspace()
                 assistant.reset_session()
                 session_active = False
                 activity.update("listening", "Listening")
@@ -256,6 +269,7 @@ def main() -> int:
             if args.once:
                 break
         except KeyboardInterrupt:
+            restore_workspace()
             print("\nGoodbye.")
             break
         except Exception as exc:

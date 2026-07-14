@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private lazy var previewFlag = appDirectory.appendingPathComponent(".runtime/hud-preview")
     private lazy var chatFile = appDirectory.appendingPathComponent(".runtime/chat.json")
     private lazy var actionsFile = appDirectory.appendingPathComponent(".runtime/actions.json")
+    private lazy var uiPlanFile = appDirectory.appendingPathComponent(".runtime/ui-plan.json")
     private lazy var contrastFile = appDirectory.appendingPathComponent(".runtime/contrast-state.json")
     private lazy var platformFile = appDirectory.appendingPathComponent(".runtime/platform-status.json")
     private var statusItem: NSStatusItem!
@@ -24,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var desktopControlItem: NSMenuItem!
     private var platformMenuItem: NSMenuItem!
     private var timer: Timer?
+    private var interactionTimer: Timer?
     private var hud: NSWindow?
     private var hudView: JarvisHUDView?
     private var previousState = ""
@@ -70,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
         refreshStatus()
         timer = Timer.scheduledTimer(timeInterval: 0.5, target: self, selector: #selector(refreshStatus), userInfo: nil, repeats: true)
+        interactionTimer = Timer.scheduledTimer(timeInterval: 0.10, target: self, selector: #selector(updateHUDInteraction), userInfo: nil, repeats: true)
     }
 
     @discardableResult
@@ -243,9 +246,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             let memories = value["memories"] as? Int ?? 0
             let documents = value["documents"] as? Int ?? 0
             let calls = value["cloud_calls_24h"] as? Int ?? 0
+            let tasks = value["task_history"] as? Int ?? 0
             let project = value["active_project"] as? String ?? ""
             let projectLabel = project.isEmpty ? "no active project" : "project: \(project)"
-            platformMenuItem.title = "Local agent: \(projectLabel) • \(memories) memories • \(documents) files • \(calls) cloud calls"
+            platformMenuItem.title = "Local agent: \(projectLabel) • \(tasks) tasks • \(memories) memories • \(documents) files • \(calls) cloud calls"
         }
         statusItem.button?.attributedTitle = NSAttributedString(
             string: state == "listening" || state == "stopped" ? "● Jarvis" : "● \(label)",
@@ -280,14 +284,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         }
         if hud == nil {
             let frame = targetScreen().visibleFrame
-            let panel = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
-            panel.level = .screenSaver
+            let panel = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.level = .floating
             panel.isOpaque = false
             panel.backgroundColor = .clear
             panel.hasShadow = false
             panel.ignoresMouseEvents = true
             panel.hidesOnDeactivate = false
             panel.isReleasedWhenClosed = false
+            panel.becomesKeyOnlyIfNeeded = true
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             let view = JarvisHUDView(frame: NSRect(origin: .zero, size: frame.size))
             view.autoresizingMask = [.width, .height]
@@ -300,6 +305,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         var events = 0
         var messages: [[String: String]] = []
         var actions: [[String: String]] = []
+        var planUpdated: Double = 0
         let taskFile = appDirectory.appendingPathComponent(".runtime/active-task.json")
         if let data = try? Data(contentsOf: taskFile),
            let task = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -308,6 +314,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                 steps = plan["steps"] as? [String] ?? []
             }
             events = (task["events"] as? [[String: Any]])?.count ?? 0
+            planUpdated = task["updated_at"] as? Double ?? 0
+        }
+        if let data = try? Data(contentsOf: uiPlanFile),
+           let plan = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let localSteps = plan["steps"] as? [String], !localSteps.isEmpty,
+           (plan["updated"] as? Double ?? 0) >= planUpdated {
+            goal = plan["goal"] as? String ?? goal
+            steps = localSteps
         }
         if let data = try? Data(contentsOf: chatFile),
            let chat = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
@@ -344,6 +358,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         hud?.setFrame(frame, display: true)
         hudView?.frame = NSRect(origin: .zero, size: frame.size)
         hud?.orderFrontRegardless()
+        updateHUDInteraction()
+    }
+
+    @objc private func updateHUDInteraction() {
+        guard let panel = hud, panel.isVisible, let view = hudView else {
+            hud?.ignoresMouseEvents = true
+            return
+        }
+        let local = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
+        panel.ignoresMouseEvents = !view.containsInteractivePoint(local)
     }
 
     @objc private func startJarvis() {

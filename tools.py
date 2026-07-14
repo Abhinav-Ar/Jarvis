@@ -9,11 +9,13 @@ from urllib.parse import quote_plus
 import requests
 
 import diagnostics
+import activity
 import integrations
 import mac_tools
 import desktop
 import git_tools
 import project_workflow
+import recovery
 from agent_platform import platform
 
 
@@ -362,6 +364,67 @@ TOOL_DEFINITIONS = [
     },
     {
         "type": "function",
+        "name": "git_push",
+        "description": "Push the current branch without creating another commit. Use to retry a previously failed push. Set confirmed true only when the user explicitly requested a push.",
+        "parameters": {
+            "type": "object",
+            "properties": {"repository": {"type": "string"}, "confirmed": {"type": "boolean"}},
+            "required": ["repository", "confirmed"], "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "desktop_accessibility_inspect",
+        "description": "Inspect labelled controls in a named Mac application locally without a screenshot or vision-model call. Sensitive field values are redacted.",
+        "parameters": {"type": "object", "properties": {"application": {"type": "string"}, "selector": {"type": "string"}}, "required": ["application", "selector"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "desktop_local_ocr",
+        "description": "Read visible text in a named application locally with Apple Vision. Use before paid screenshot analysis when labelled Accessibility controls are unavailable.",
+        "parameters": {"type": "object", "properties": {"application": {"type": "string"}}, "required": ["application"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "desktop_accessibility_set",
+        "description": "Set a non-sensitive labelled text field in a named application. The user must have explicitly requested the typing action.",
+        "parameters": {"type": "object", "properties": {"application": {"type": "string"}, "selector": {"type": "string"}, "text": {"type": "string"}, "confirmed": {"type": "boolean"}}, "required": ["application", "selector", "text", "confirmed"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "desktop_accessibility_press",
+        "description": "Press a labelled non-sensitive control in a named application. Requires explicit authorization for the requested action.",
+        "parameters": {"type": "object", "properties": {"application": {"type": "string"}, "selector": {"type": "string"}, "confirmed": {"type": "boolean"}}, "required": ["application", "selector", "confirmed"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "desktop_window_arrange",
+        "description": "Normalize fullscreen state, then move and resize one or two named application windows into a verified display-aware work stage behind the click-through Jarvis HUD. Use at the start of visible multi-step app work. This is reversible.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "applications": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 2},
+                "confirmed": {"type": "boolean"},
+            },
+            "required": ["applications", "confirmed"], "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "desktop_window_restore",
+        "description": "Restore application windows previously staged by Jarvis to their original frames.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "applications": {"type": "array", "items": {"type": "string"}},
+                "confirmed": {"type": "boolean"},
+            },
+            "required": ["applications", "confirmed"], "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
         "name": "desktop_action",
         "description": "Perform one bounded Mac input action after screen inspection. Desktop control must be visibly enabled in the menu. Never interact with passwords, authentication codes, payment data, purchases, deletions, messages, or final form submission without explicit confirmation. Coordinates use screenshot pixels.",
         "parameters": {
@@ -384,6 +447,12 @@ TOOL_DEFINITIONS = [
         "type": "function", "name": "agent_status",
         "description": "Report the local Jarvis platform status, including memory, indexed documents, workflows, jobs, capabilities, and cloud-call policy.",
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "task_history_search",
+        "description": "Search Jarvis's durable local task and failure history. Use when the user asks what happened, what failed, or what problem Jarvis encountered previously.",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["query", "limit"], "additionalProperties": False},
         "strict": True,
     },
     {
@@ -446,9 +515,9 @@ TOOL_GROUPS = {
         "create_email_draft", "find_contact", "find_files", "apple_shortcuts",
     },
     "home": {"home_assistant_control"},
-    "desktop": {"open_application", "desktop_inspect", "desktop_action"},
-    "git": {"open_application", "git_repositories", "git_status", "git_commit", "git_commit_and_push"},
-    "agent": {"agent_status", "memory_store", "memory_search", "memory_forget", "local_knowledge_search"},
+    "desktop": {"open_application", "desktop_inspect", "desktop_action", "desktop_accessibility_inspect", "desktop_local_ocr", "desktop_accessibility_set", "desktop_accessibility_press", "desktop_window_arrange", "desktop_window_restore"},
+    "git": {"open_application", "git_repositories", "git_status", "git_commit", "git_commit_and_push", "git_push", "desktop_accessibility_inspect", "desktop_local_ocr", "desktop_accessibility_set", "desktop_accessibility_press", "desktop_window_arrange", "desktop_window_restore"},
+    "agent": {"agent_status", "task_history_search", "memory_store", "memory_search", "memory_forget", "local_knowledge_search"},
     "project": {"project_session_start", "project_session_resume", "project_session_status", "project_session_close", "git_status"},
 }
 
@@ -466,6 +535,7 @@ def select_definitions(request: str) -> list[dict]:
         (("light", "thermostat", "home assistant", "switch"), "home"),
         (("open ", "launch ", "close ", "quit ", "exit ", "volume", "clipboard", "battery", "system status", "notification"), "mac"),
         (("remember", "forget", "memory", "what do you know", "jarvis status", "agent status", "indexed", "knowledge"), "agent"),
+        (("what happened", "what failed", "last task", "previous task", "problem did you", "your logs", "task history"), "agent"),
         (("project session", "start project", "resume project", "end project", "close project", "project status"), "project"),
     )
     for markers, group in routes:
@@ -570,11 +640,19 @@ def execute(name: str, arguments: dict) -> dict:
         "apple_shortcuts": mac_tools.shortcuts,
         "desktop_inspect": desktop.inspect_screen,
         "desktop_action": desktop.perform_action,
+        "desktop_accessibility_inspect": desktop.accessibility_snapshot,
+        "desktop_local_ocr": desktop.local_ocr,
+        "desktop_accessibility_set": desktop.accessibility_set,
+        "desktop_accessibility_press": desktop.accessibility_press,
+        "desktop_window_arrange": desktop.arrange_windows,
+        "desktop_window_restore": desktop.restore_windows,
         "git_repositories": git_tools.repositories,
         "git_status": git_tools.status,
         "git_commit_and_push": git_tools.commit_and_push,
         "git_commit": git_tools.commit,
+        "git_push": git_tools.push,
         "agent_status": platform().summary,
+        "task_history_search": platform().recent_tasks,
         "memory_store": platform().remember,
         "memory_search": platform().search_memory,
         "memory_forget": platform().forget,
@@ -586,7 +664,14 @@ def execute(name: str, arguments: dict) -> dict:
     }
     if name not in handlers:
         return {"ok": False, "error": f"Unknown tool: {name}"}
-    return handlers[name](**arguments)
+    result = recovery.execute(name, arguments, handlers[name])
+    if result.get("ok") and name in {"open_application", "browser_navigate"}:
+        application = str(result.get("application") or result.get("browser") or arguments.get("name") or "").strip()
+        if application:
+            staged = desktop.arrange_windows([application], confirmed=True)
+            result["workspace_staged"] = bool(staged.get("ok"))
+            activity.record_step("stage_application_window", application, staged)
+    return result
 
 
 def result_summary(name: str, arguments: dict, result: dict) -> str:
@@ -616,6 +701,16 @@ def result_summary(name: str, arguments: dict, result: dict) -> str:
         return f"Todoist task created: {arguments.get('content', 'your task')}."
     if name == "desktop_action":
         return "Done."
+    if name in {"desktop_accessibility_set", "desktop_accessibility_press"}:
+        return "Done."
+    if name == "desktop_window_arrange":
+        return "The requested workspace is staged beside Jarvis."
+    if name == "desktop_window_restore":
+        return "The application windows are back in their original positions."
+    if name == "git_commit":
+        return f"Committed {result.get('repository')} as {result.get('commit')}."
+    if name in {"git_commit_and_push", "git_push"}:
+        return f"{result.get('repository')} is pushed and synchronized with GitHub."
     if name == "memory_store":
         return f"I’ll remember {arguments.get('key')}."
     if name == "memory_forget":
@@ -628,6 +723,25 @@ def result_summary(name: str, arguments: dict, result: dict) -> str:
         warning = result.get("warning", "")
         return f"Project session closed. {warning}".strip()
     return ""
+
+
+def failure_summary(result: dict) -> str:
+    code = result.get("error_code", "")
+    if code == "repository_ambiguous":
+        return "I need the repository name before I can continue. Options are: " + ", ".join(result.get("candidates", [])) + "."
+    if code in {"remote_permission_denied", "authentication_required"}:
+        committed = " Your commit is saved locally, so I won’t create another one." if result.get("committed") else ""
+        return "GitHub rejected the push because this account is not authenticated or lacks write access." + committed
+    if code == "unsaved_changes_dialog":
+        return "The app is waiting on unsaved changes. I stopped without discarding anything."
+    if code in {"accessibility_permission_required", "permission_required"}:
+        return "I need Accessibility permission for that application before I can continue."
+    if code == "confirmation_required":
+        return "I need your explicit confirmation before performing that action."
+    if code in {"playlist_not_found", "track_not_found", "target_not_found", "control_not_found"}:
+        return str(result.get("error", "I couldn't find the requested target."))
+    recovery = str(result.get("recovery", "")).strip()
+    return " ".join(part for part in (str(result.get("error", "I couldn't complete that action.")), recovery) if part)
 
 
 def parse_command(command: str) -> None:

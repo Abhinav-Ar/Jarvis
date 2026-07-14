@@ -17,7 +17,7 @@ tools when requested, and speaks the result through the Mac's audio output.
 - Plan multi-step goals, insert safe prerequisites, journal tool evidence, recover
   from failed steps, and audit success criteria before reporting completion
 - Show live hearing, planning, working, checking, speaking, needs-input, and error
-  states through the menu bar and a temporary floating progress panel
+  states through the menu bar and a compact translucent full-display HUD
 - Present the active voice session as a bounded live chat showing both user and
   Jarvis messages, reset cleanly whenever Jarvis starts
 - Keep the HUD visible during screen inspection while excluding only Jarvis's
@@ -27,8 +27,8 @@ tools when requested, and speaks the result through the Mac's audio output.
   wake phrase again
 - Write rotated structured diagnostic events with request IDs, timings, plans,
   tool results, display mappings, speech playback, and redacted failures
-- Use local activation/completion sounds and an “On it” acknowledgement for
-  longer tasks
+- Speak selected high-value milestones during longer tasks while keeping routine
+  clicks and inspections in the visual telemetry feed
 - Route common local commands instantly and skip full planning and auditing for
   straightforward single-step requests
 - Spoken responses through the built-in macOS voice by default, with optional OpenAI text-to-speech
@@ -36,6 +36,9 @@ tools when requested, and speaks the result through the Mac's audio output.
 ### Mac control
 
 - Open installed applications
+- Detect and exit native fullscreen when necessary, then move and resize one or
+  two app/browser windows into a verified display-aware work stage and restore
+  their original frames and fullscreen state when the session ends
 - Set output volume
 - Read or replace the clipboard when explicitly requested
 - Report battery, power, CPU, memory, disk, and macOS status
@@ -70,6 +73,8 @@ Jarvis now maintains a local SQLite agent database in `.runtime/agent.db` with:
 - integration and capability health state;
 - read-only, reversible, and consequential safety classifications;
 - actual cloud-call/token accounting and a daily hard call limit;
+- durable task, step, result, and structured-failure history that later requests can search;
+- deterministic prerequisite and recovery policies for known workflows;
 - a small bounded retrieval packet instead of uploading the entire local database.
 
 The menu-bar command center displays memory, indexed-file, workflow, and recent
@@ -93,6 +98,44 @@ colon-separated list on macOS, for example:
 JARVIS_INDEX_ROOTS=/Users/you/Documents/Projects:/Users/you/Documents/Notes
 JARVIS_INDEX_MAX_FILES=500
 ```
+
+## Local execution and recovery
+
+Known workflows are executed as local state machines rather than repeatedly
+asking the language model what to do next. Every step records its action, result,
+error code, and bounded evidence in SQLite. A later question such as “what failed
+last time?” reads that record instead of guessing from the current screen.
+
+The Git workflow now identifies the active repository, inspects its changes,
+generates a non-empty commit summary locally, commits, pushes, and verifies the
+working tree and remote synchronization. If command-line Git is rejected but the
+request names GitHub Desktop, Jarvis makes one bounded attempt through GitHub
+Desktop's signed-in session and verifies the repository afterward. It never
+recommits while retrying a push.
+
+For graphical applications, Jarvis can inspect, fill, and press controls by their
+Accessibility labels. This costs no vision tokens and avoids coordinate drift.
+When Electron hides its renderer Accessibility tree, Jarvis uses Apple's on-device
+Vision OCR to read visible labels and identify context such as GitHub Desktop's
+current repository. Paid screenshot vision is the final fallback only when local
+labels and OCR are insufficient. Passwords, security codes, tokens, payment fields, and
+unconfirmed submissions remain prohibited.
+
+The HUD is a click-through translucent overlay: conversation stays in the upper
+corner, action telemetry and the dependency path stay near the lower corners, and
+the center remains available for the working application. Futuristic grid, scan,
+and command-core animation provide state visibility without an opaque sidebar.
+Hovering over conversation or telemetry temporarily enables scrolling; every
+other region remains click-through. When Jarvis opens apps for visible work, it
+normalizes native fullscreen, identifies processes by bundle and process aliases,
+sets frames through Accessibility, and verifies the resulting coordinates. Two
+named apps can be tiled on the same display. Original window frames and fullscreen
+state are restored after “Hey Jarvis, that’ll be all,” logoff, or an explicit restore.
+
+Structured recovery also covers foreground activation, unsaved-work dialogs,
+Spotify playback-device activation, missing project targets, network failures,
+and required permissions. Known blockers return a direct local explanation;
+unfamiliar failures alone escalate to cloud reasoning.
 
 ## Project sessions
 
@@ -183,7 +226,8 @@ each feature is first used:
 - Possibly **Files and Folders** or **Full Disk Access** if you want Spotlight
   results from protected locations
 - **Screen & System Audio Recording** for on-demand visual screen inspection
-- **Accessibility** for permission-gated clicking, typing, keys, and scrolling
+- **Accessibility** for permission-gated clicking, typing, keys, scrolling, and
+  reversible application-window positioning
 
 Review these under System Settings → Privacy & Security. Denying one permission
 only disables that related action.

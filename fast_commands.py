@@ -8,9 +8,40 @@ from urllib.parse import urlparse
 import mac_tools
 
 
+def _stage(application: str) -> None:
+    try:
+        import desktop
+        import activity
+        result = desktop.arrange_windows([application], confirmed=True)
+        activity.record_step("stage_application_window", application, result)
+    except Exception:
+        pass
+
+
 def execute(text: str) -> str | None:
     raw = " ".join(text.lower().strip().split()).rstrip(".,!?")
     raw = re.sub(r"^(?:hey|okay|ok|please)[, ]+", "", raw)
+    workspace_match = re.fullmatch(
+        r"(?:open|launch) (.+?) and (.+?)(?:,)? then (?:arrange|tile) (?:them|the windows)(?: .*)?",
+        raw,
+    )
+    tile_match = re.fullmatch(r"(?:arrange|tile) (.+?) and (.+?) side by side", raw)
+    if workspace_match or tile_match:
+        import activity
+        import desktop
+        match = workspace_match or tile_match
+        applications = [mac_tools.canonical_application_name(match.group(1)), mac_tools.canonical_application_name(match.group(2))]
+        if all(mac_tools.application_exists(application) for application in applications):
+            activity.set_execution_path(
+                f"Prepare a two-application workspace for {applications[0]} and {applications[1]}",
+                ["Open both applications", "Exit fullscreen if necessary", "Move both windows to one display", "Tile the windows", "Verify both frames"],
+            )
+            activity.update("working", "Preparing workspace…", " • ".join(applications))
+            result = desktop.arrange_windows(applications, confirmed=True)
+            activity.record_step("arrange_two_app_workspace", ", ".join(applications), result)
+            if result.get("ok"):
+                return f"{applications[0]} and {applications[1]} are arranged side by side."
+            return f"I couldn’t finish the window layout. {result.get('error', 'The window state could not be verified.')}"
     combined_navigation = re.fullmatch(
         r"(?:open|launch) safari (?:and|then|and then) (?:open|go to|navigate to) (https?://\S+|(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}(?:/\S*)?)",
         raw,
@@ -25,8 +56,17 @@ def execute(text: str) -> str | None:
         result = mac_tools.open_url(address, "Safari")
         host = urlparse(result.get("url", "")).netloc.removeprefix("www.")
         if result.get("ok"):
+            _stage("Safari")
             return (f"Safari is open on {host or address}." if combined_navigation else
                     f"{host or address} is open in Safari.")
+
+    # Known multi-step workflows own their prerequisite, recovery, and
+    # verification loops locally. GPT is only used if no deterministic workflow
+    # recognizes the request.
+    import execution_engine
+    workflow_reply = execution_engine.try_execute(text)
+    if workflow_reply:
+        return workflow_reply
 
     command = " ".join(re.sub(r"[^a-z0-9 ]", " ", text.lower()).split())
     for prefix in ("hey ", "okay ", "ok ", "please "):
@@ -98,6 +138,8 @@ def execute(text: str) -> str | None:
             return None
         app = mac_tools.canonical_application_name(requested)
         result = mac_tools.open_application(app)
+        if result.get("ok"):
+            _stage(app)
         return f"{app} is open." if result.get("ok") else None
 
     volume_match = re.fullmatch(r"set (?:the )?volume to (\d{1,3})(?: percent)?", command)

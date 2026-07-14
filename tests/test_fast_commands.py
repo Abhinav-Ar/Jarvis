@@ -5,30 +5,47 @@ import fast_commands
 
 
 class FastCommandTests(unittest.TestCase):
+    @patch("activity.record_step")
+    @patch("activity.update")
+    @patch("activity.set_execution_path")
+    @patch("desktop.arrange_windows", return_value={"ok": True})
+    @patch("fast_commands.mac_tools.application_exists", return_value=True)
+    def test_two_app_workspace_bypasses_model(self, exists, arrange, plan, update, record):
+        answer = fast_commands.execute(
+            "Open GitHub Desktop and Visual Studio Code, then arrange them so I can work in both"
+        )
+        self.assertEqual(answer, "GitHub Desktop and Visual Studio Code are arranged side by side.")
+        arrange.assert_called_once_with(["GitHub Desktop", "Visual Studio Code"], confirmed=True)
+
+    @patch("fast_commands._stage")
     @patch("fast_commands.mac_tools.application_exists", return_value=True)
     @patch("fast_commands.mac_tools.open_application", return_value={"ok": True})
-    def test_open_known_app_bypasses_model(self, opened, exists):
+    def test_open_known_app_bypasses_model(self, opened, exists, stage):
         self.assertEqual(fast_commands.execute("Hey, open Safari"), "Safari is open.")
         opened.assert_called_once_with("Safari")
+        stage.assert_called_once_with("Safari")
 
     @patch("fast_commands.mac_tools.quit_application", return_value={"ok": True})
     def test_close_app_bypasses_model(self, closed):
         self.assertEqual(fast_commands.execute("Close Safari"), "Safari is closed.")
         closed.assert_called_once_with("Safari")
 
+    @patch("fast_commands._stage")
     @patch("fast_commands.mac_tools.application_exists", return_value=True)
     @patch("fast_commands.mac_tools.open_application", return_value={"ok": True})
-    def test_app_aliases_are_canonical(self, opened, exists):
+    def test_app_aliases_are_canonical(self, opened, exists, stage):
         self.assertEqual(fast_commands.execute("Open Chrome"), "Google Chrome is open.")
         opened.assert_called_once_with("Google Chrome")
 
     def test_multistep_request_does_not_take_fast_lane(self):
         self.assertIsNone(fast_commands.execute("Open Safari and then go to Google"))
 
+    @patch("fast_commands._stage")
     @patch("fast_commands.mac_tools.open_url", return_value={"ok": True, "url": "https://google.com"})
-    def test_direct_website_navigation_bypasses_model(self, opened):
+    def test_direct_website_navigation_bypasses_model(self, opened, stage):
         self.assertEqual(fast_commands.execute("Go to google.com"), "google.com is open in Safari.")
         opened.assert_called_once_with("google.com", "Safari")
+        stage.assert_called_once_with("Safari")
 
     @patch("spot.play_playlist", return_value={"ok": True, "name": "UG"})
     def test_named_playlist_bypasses_model(self, played):

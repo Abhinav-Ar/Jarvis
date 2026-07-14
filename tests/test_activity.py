@@ -15,6 +15,7 @@ class ActivityTests(unittest.TestCase):
                 activity, "CHAT_FILE", runtime / "chat.json"
             ), patch.object(activity, "STATE_FILE", runtime / "activity.json"), patch.object(
                 activity, "ACTION_FILE", runtime / "actions.json"
+            ), patch.object(activity, "PLAN_FILE", runtime / "ui-plan.json"
             ):
                 for index in range(15):
                     activity.append_chat("user", f"message {index}")

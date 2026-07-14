@@ -58,6 +58,29 @@ class GitToolTests(unittest.TestCase):
             self.assertTrue(result["working_tree_clean"])
             self.assertNotIn("push", [part for call in git.call_args_list for part in call.args])
 
+    def test_empty_message_is_generated_locally(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            repo = root / "Jarvis"
+            (repo / ".git").mkdir(parents=True)
+            responses = [" M assist.py\n M tests/test_assist.py", "", "", "abc123", ""]
+            with patch.object(git_tools, "REPOSITORY_ROOT", root), patch(
+                "git_tools._git", side_effect=responses
+            ) as git:
+                result = git_tools.commit("Jarvis", "", True)
+            self.assertTrue(result["ok"])
+            self.assertTrue(result["message"])
+            commit_call = next(call.args for call in git.call_args_list if "commit" in call.args)
+            self.assertIn("tests", commit_call[-1].lower())
+
+    def test_permission_failure_is_structured_and_preserves_commit(self):
+        code, retryable, requires_user, _ = git_tools.classify_error(
+            "remote: Permission denied; error 403"
+        )
+        self.assertEqual(code, "remote_permission_denied")
+        self.assertFalse(retryable)
+        self.assertTrue(requires_user)
+
 
 if __name__ == "__main__":
     unittest.main()

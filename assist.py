@@ -72,6 +72,18 @@ Use screen inspection and desktop actions only as a fallback when no semantic to
 can do the job. Text the user explicitly asked you to type is confirmed, but typing
 does not authorize submitting it. If an app fails to become frontmost, retry using
 the relevant semantic tool or inspect and recover before replying.
+Prefer labelled Accessibility inspection and actions over screenshots and coordinates.
+They run locally, cost no model tokens, and must be verified after use. Use visual
+inspection only when the relevant control is not exposed through Accessibility.
+If Accessibility labels are unavailable, use on-device OCR before paid cloud vision.
+For visible work spanning one or two applications, use desktop_window_arrange at
+the beginning. It normalizes native fullscreen state and verifies the resulting
+window frames under the click-through HUD. Restore them when the user asks or when
+the session ends.
+Use the live execution feed for operational detail; spoken progress should mention
+only meaningful milestones, blockers, and final verification, not every click.
+When asked what failed or what happened previously, search durable task history;
+never infer an earlier failure from the current screen.
 For coordinate work in a named application, call desktop_inspect with that exact
 application name before every coordinate sequence. This activates the application,
 locks inspection to its physical display, and prevents clicks on another monitor.
@@ -142,7 +154,7 @@ class JarvisAssistant:
         complex_task = self.task_engine.lane == "complex"
         turn_effort = self.reasoning_effort if complex_task else "none"
         context_suffix = ""
-        if local_context["memories"] or local_context["documents"]:
+        if any(local_context.values()):
             context_suffix = "\n\nRelevant user-authorized local context:\n" + json.dumps(local_context)
         planned_input = (question + context_suffix) if not complex_task else (
             f"User request:\n{question}\n\nStructured task plan:\n{self.task_engine.context()}\n"
@@ -265,6 +277,19 @@ class JarvisAssistant:
                         tools=[name for name, _, _ in completed_calls], answer_chars=len(answer),
                     )
                     return answer
+
+            # A structured, known blocker does not benefit from another model
+            # round-trip. Preserve the evidence and ask only for the missing
+            # permission, identity, or confirmation in plain language.
+            blockers = [result for _, _, result in completed_calls if not result.get("ok") and result.get("requires_user")]
+            if blockers:
+                answer = tools.failure_summary(blockers[-1])
+                self.task_engine.finish("awaiting_input")
+                diagnostics.event(
+                    "known_blocker_returned_locally", request_id=request_id,
+                    error_code=blockers[-1].get("error_code", ""), answer_chars=len(answer),
+                )
+                return answer
 
             response = self._cloud_response("tool_followup",
                 model=self.model,

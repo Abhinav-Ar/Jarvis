@@ -8,6 +8,8 @@ from pathlib import Path
 from agent_platform import platform
 import git_tools
 import mac_tools
+import desktop
+import activity
 
 
 def _commit(path: str) -> str:
@@ -19,7 +21,14 @@ def _commit(path: str) -> str:
 
 
 def start(repository: str) -> dict:
-    state = git_tools.status(repository)
+    activity.set_execution_path(
+        f"Open and restore the {repository} project context",
+        ["Inspect repository state", "Index authorized project context", "Open project applications", "Stage the workspace", "Verify the session"],
+    )
+    try:
+        state = git_tools.status(repository)
+    except (ValueError, RuntimeError) as exc:
+        return {"ok": False, "error_code": "project_not_found", "requires_user": True, "error": str(exc)}
     if not state.get("ok"):
         return state
     path = state["path"]
@@ -35,6 +44,9 @@ def start(repository: str) -> dict:
                 opened.append(application)
             except Exception:
                 pass
+    if opened:
+        arranged = desktop.arrange_windows(opened[:2], confirmed=True)
+        activity.record_step("stage_project_workspace", ", ".join(opened[:2]), arranged)
     return {
         **session, "branch": state["branch"], "path": path,
         "changed_files": len(state["changed_files"]), "opened": opened,
@@ -67,7 +79,7 @@ def status() -> dict:
 def close(notes: str = "") -> dict:
     active = platform().active_project_session().get("session")
     if not active:
-        return {"ok": False, "error": "No project session is active."}
+        return {"ok": False, "error_code": "no_active_project", "requires_user": True, "error": "No project session is active."}
     state = git_tools.status(active["path"])
     if not state.get("ok"):
         return state

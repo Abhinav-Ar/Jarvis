@@ -140,6 +140,25 @@ class AssistantTests(unittest.TestCase):
             self.assertEqual(assistant.ask("Open Safari"), "Safari is open.")
         self.assertEqual(len(fake.calls), 1)
 
+    def test_known_user_blocker_stops_without_another_model_call(self):
+        tool_call = SimpleNamespace(
+            type="function_call", name="git_push",
+            arguments='{"repository":"Jarvis","confirmed":true}', call_id="c1",
+        )
+        action = SimpleNamespace(id="r1", output=[tool_call], output_text="")
+        assistant = JarvisAssistant()
+        self.bypass_planner(assistant, requires_tools=True)
+        fake = FakeResponses([action])
+        assistant.client = SimpleNamespace(responses=fake)
+        failure = {
+            "ok": False, "error_code": "remote_permission_denied",
+            "requires_user": True, "committed": True, "error": "403",
+        }
+        with patch("assist.tools.execute", return_value=failure):
+            answer = assistant.ask("Commit and push Jarvis")
+        self.assertIn("rejected the push", answer)
+        self.assertEqual(len(fake.calls), 1)
+
     def test_actionable_task_is_audited_before_completion(self):
         tool_call = SimpleNamespace(
             type="function_call", name="open_application", arguments='{"name":"Safari"}', call_id="c1"

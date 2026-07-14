@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 import diagnostics
+from agent_platform import platform
 
 
 PLAN_SCHEMA = {
@@ -70,12 +71,20 @@ class TaskEngine:
         self.record: TaskRecord | None = None
         self.lane = "simple"
 
+    def _persist_new_record(self) -> None:
+        if self.record:
+            platform().begin_task(
+                self.record.task_id, self.record.request, self.record.plan.goal,
+                "model" if self.lane == "complex" else "direct",
+            )
+
     @staticmethod
     def route(request: str) -> str:
         text = request.lower()
         markers = (
             " and then ", "after that", "commit", "push", "fill out", "organize",
-            "compare", "research", "all of", "multiple", "workflow",
+            "compare", "research", "all of", "multiple", "workflow", " then ",
+            "arrange", "tile", "side by side", "both apps", "both applications",
         )
         return "complex" if any(marker in text for marker in markers) else "simple"
 
@@ -95,6 +104,7 @@ class TaskEngine:
             )
             self.record = TaskRecord(uuid.uuid4().hex, request, plan)
             self._save()
+            self._persist_new_record()
             return plan
         planner_input = request
         if self.record and time.time() - self.record.updated_at < 600:
@@ -137,6 +147,7 @@ class TaskEngine:
             plan = TaskPlan.fallback(request)
         self.record = TaskRecord(uuid.uuid4().hex, request, plan)
         self._save()
+        self._persist_new_record()
         return plan
 
     def context(self) -> str:
@@ -163,9 +174,16 @@ class TaskEngine:
                 "tool": name,
                 "ok": bool(result.get("ok")),
                 "error": str(result.get("error", ""))[:300],
+                "error_code": str(result.get("error_code", ""))[:100],
             }
         )
         self.record.updated_at = time.time()
+        platform().record_task_event(
+            self.record.task_id, len(self.record.events), name,
+            "succeeded" if result.get("ok") else "failed",
+            str(result.get("error") or result.get("message") or "")[:2000],
+            {key: value for key, value in result.items() if key not in {"text", "content", "analysis"}},
+        )
         self._save()
 
     def finish(self, status: str) -> None:
@@ -173,6 +191,11 @@ class TaskEngine:
             return
         self.record.status = status
         self.record.updated_at = time.time()
+        last = self.record.events[-1] if self.record.events else {}
+        platform().finish_task(
+            self.record.task_id, status,
+            str(last.get("error", "")) or f"Task {status}", str(last.get("error_code", "")),
+        )
         self._save()
 
     def reset(self) -> None:

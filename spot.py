@@ -14,6 +14,10 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
 
+def _failure(message: str, code: str, *, retryable: bool = False, requires_user: bool = False) -> dict:
+    return {"ok": False, "error": message, "error_code": code, "retryable": retryable, "requires_user": requires_user}
+
+
 def _client() -> spotipy.Spotify:
     missing = [
         name
@@ -162,7 +166,7 @@ def create_discovery_playlist(name: str = "Jarvis Discoveries") -> dict:
             break
 
     if not candidates:
-        return {"ok": False, "error": "No unfamiliar tracks were found from your Spotify history."}
+        return _failure("No unfamiliar tracks were found from your Spotify history.", "no_recommendations")
 
     playlist_name = name.strip() or "Jarvis Discoveries"
     created = _api(
@@ -201,24 +205,24 @@ def play_playlist(name: str = "") -> dict:
         or bool(playlist.get("collaborative"))
     ]
     if not playlists:
-        return {
-            "ok": False,
-            "error": "No owned or collaborative Spotify playlists are available in this account.",
-        }
+        return _failure("No owned or collaborative Spotify playlists are available in this account.", "no_owned_playlists")
     requested = name.strip().casefold()
     if requested:
         exact = [p for p in playlists if (p.get("name") or "").casefold() == requested]
         partial = [p for p in playlists if requested in (p.get("name") or "").casefold()]
         matches = exact or partial
         if not matches:
-            return {"ok": False, "error": "No accessible playlist matched the requested name."}
+            return _failure("No accessible playlist matched the requested name.", "playlist_not_found", requires_user=True)
         playlist = matches[0]
     else:
         playlist = random.SystemRandom().choice(playlists)
     uri = playlist.get("uri")
     if not uri:
-        return {"ok": False, "error": "The selected playlist has no playable Spotify URI."}
-    _play_context(spotify, uri)
+        return _failure("The selected playlist has no playable Spotify URI.", "playlist_unplayable")
+    try:
+        _play_context(spotify, uri)
+    except RuntimeError as exc:
+        return _failure(str(exc), "playback_device_unavailable", retryable=True)
     return {
         "ok": True,
         "action": "play_existing_playlist",
@@ -303,7 +307,7 @@ def control(action: str, query: str = "") -> dict:
             results = spotify.search(q=query, type="track", limit=1)
             tracks = results.get("tracks", {}).get("items", [])
             if not tracks:
-                return {"ok": False, "error": f"No Spotify track found for: {query}"}
+                return _failure(f"No Spotify track found for: {query}", "track_not_found", requires_user=True)
             track = tracks[0]
             _local_play(track["uri"])
             return {
@@ -338,7 +342,7 @@ def control(action: str, query: str = "") -> dict:
             "album": track.get("album", {}).get("name"),
         }
     else:
-        return {"ok": False, "error": f"Unknown Spotify action: {action}"}
+        return _failure(f"Unknown Spotify action: {action}", "unsupported_spotify_action", requires_user=True)
     return {"ok": True, "action": action}
 
 

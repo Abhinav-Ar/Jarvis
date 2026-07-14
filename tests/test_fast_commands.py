@@ -5,10 +5,22 @@ import fast_commands
 
 
 class FastCommandTests(unittest.TestCase):
+    @patch("fast_commands.mac_tools.application_exists", return_value=True)
     @patch("fast_commands.mac_tools.open_application", return_value={"ok": True})
-    def test_open_known_app_bypasses_model(self, opened):
+    def test_open_known_app_bypasses_model(self, opened, exists):
         self.assertEqual(fast_commands.execute("Hey, open Safari"), "Safari is open.")
         opened.assert_called_once_with("Safari")
+
+    @patch("fast_commands.mac_tools.quit_application", return_value={"ok": True})
+    def test_close_app_bypasses_model(self, closed):
+        self.assertEqual(fast_commands.execute("Close Safari"), "Safari is closed.")
+        closed.assert_called_once_with("Safari")
+
+    @patch("fast_commands.mac_tools.application_exists", return_value=True)
+    @patch("fast_commands.mac_tools.open_application", return_value={"ok": True})
+    def test_app_aliases_are_canonical(self, opened, exists):
+        self.assertEqual(fast_commands.execute("Open Chrome"), "Google Chrome is open.")
+        opened.assert_called_once_with("Google Chrome")
 
     def test_multistep_request_does_not_take_fast_lane(self):
         self.assertIsNone(fast_commands.execute("Open Safari and then go to Google"))

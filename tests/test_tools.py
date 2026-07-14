@@ -24,6 +24,7 @@ class ToolTests(unittest.TestCase):
         ):
             handler_names = {
                 "get_weather", "open_search", "spotify_control", "open_application", "browser_navigate",
+                "quit_application",
                 "set_system_volume", "clipboard", "system_status", "show_notification",
                 "create_reminder", "create_note", "create_calendar_event",
                 "todoist_create_task", "home_assistant_control", "create_email_draft",

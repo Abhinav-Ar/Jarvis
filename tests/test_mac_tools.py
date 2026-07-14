@@ -31,6 +31,22 @@ class MacToolTests(unittest.TestCase):
         result = mac_tools.open_url("file:///etc/passwd", "Safari")
         self.assertFalse(result["ok"])
 
+    @patch("mac_tools._apple", return_value="closed")
+    @patch("mac_tools._run", return_value="requested")
+    def test_quit_application_requests_normal_quit_and_verifies_exit(self, run, apple):
+        result = mac_tools.quit_application("Safari")
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["closed"])
+        self.assertIn("Application(argv[0]).quit()", run.call_args.args[0][4])
+        apple.assert_called_once()
+
+    @patch("mac_tools._apple", return_value="still_running")
+    @patch("mac_tools._run", return_value="requested")
+    def test_quit_application_does_not_claim_unsaved_app_closed(self, run, apple):
+        result = mac_tools.quit_application("Pages")
+        self.assertFalse(result["ok"])
+        self.assertIn("unsaved-changes", result["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

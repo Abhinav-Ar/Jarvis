@@ -57,9 +57,24 @@ def execute(text: str) -> str | None:
         result = spot.play_playlist(name)
         return f"Playing {result.get('name', name)}." if result.get("ok") else None
 
-    app_match = re.fullmatch(r"(?:open|launch)(?: up)? (safari|spotify|github desktop|mail|calendar|notes)", command)
+    close_match = re.fullmatch(r"(?:close|quit|exit)(?: out of)? (?:the )?(.+?)(?: app| application)?", command)
+    if close_match:
+        requested = close_match.group(1).strip()
+        if requested in {"current", "current app", "this", "this app", "active app"}:
+            requested = mac_tools.frontmost_application()
+        app = mac_tools.canonical_application_name(requested)
+        result = mac_tools.quit_application(app)
+        if result.get("ok"):
+            return f"{app} is closed."
+        error = result.get("error", "")
+        return f"I couldn't close {app}. {error}".strip()
+
+    app_match = re.fullmatch(r"(?:open|launch|start)(?: up)? (?:the )?([a-z0-9][a-z0-9 +._-]*?)(?: app| application)?", command)
     if app_match:
-        app = app_match.group(1).title().replace("Github", "GitHub")
+        requested = app_match.group(1).strip()
+        if not mac_tools.application_exists(requested):
+            return None
+        app = mac_tools.canonical_application_name(requested)
         result = mac_tools.open_application(app)
         return f"{app} is open." if result.get("ok") else None
 

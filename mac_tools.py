@@ -10,6 +10,27 @@ from urllib.parse import urlparse
 import psutil
 
 
+APP_ALIASES = {
+    "chrome": "Google Chrome", "google chrome": "Google Chrome",
+    "github": "GitHub Desktop", "github desktop": "GitHub Desktop",
+    "code": "Visual Studio Code", "vs code": "Visual Studio Code",
+    "vscode": "Visual Studio Code", "finder": "Finder",
+}
+
+
+def canonical_application_name(name: str) -> str:
+    cleaned = " ".join(name.strip().split())
+    return APP_ALIASES.get(cleaned.lower(), cleaned.title().replace("Github", "GitHub"))
+
+
+def application_exists(name: str) -> bool:
+    result = subprocess.run(
+        ["/usr/bin/open", "-Ra", canonical_application_name(name)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+    )
+    return result.returncode == 0
+
+
 def _run(command: list[str]) -> str:
     result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=20)
     return result.stdout.strip()
@@ -20,6 +41,7 @@ def _apple(script: str, *args: str) -> str:
 
 
 def open_application(name: str) -> dict:
+    name = canonical_application_name(name)
     subprocess.run(["/usr/bin/open", "-a", name], check=True, timeout=20)
     script = """on run argv
 set appName to item 1 of argv
@@ -36,6 +58,42 @@ return "opened"
 end run"""
     status = _apple(script, name)
     return {"ok": True, "application": name, "frontmost": status == "frontmost"}
+
+
+def quit_application(name: str) -> dict:
+    """Request a normal macOS quit and verify the process actually exits."""
+    name = canonical_application_name(name)
+    if not name:
+        return {"ok": False, "error": "An application name is required."}
+    _run([
+        "/usr/bin/osascript", "-l", "JavaScript", "-e",
+        "function run(argv) { Application(argv[0]).quit(); return 'requested'; }", name,
+    ])
+    script = """on run argv
+set appName to item 1 of argv
+tell application "System Events"
+  repeat 30 times
+    if not (exists (first application process whose name is appName)) then return "closed"
+    delay 0.1
+  end repeat
+end tell
+return "still_running"
+end run"""
+    status = _apple(script, name)
+    if status == "closed":
+        return {"ok": True, "application": name, "closed": True}
+    return {
+        "ok": False,
+        "application": name,
+        "closed": False,
+        "error": f"{name} is still open, possibly because it is waiting for an unsaved-changes dialog.",
+    }
+
+
+def frontmost_application() -> str:
+    return _apple(
+        'tell application "System Events" to return name of first application process whose frontmost is true'
+    ).strip()
 
 
 def open_url(url: str, browser: str = "Safari") -> dict:

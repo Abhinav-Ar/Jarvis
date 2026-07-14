@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -34,6 +35,9 @@ execute every authorized step in order, inspect tool results, diagnose blockers,
 and continue until the requested outcome is complete or genuinely impossible.
 Do not ask the user to open an app when open_application can do it. Do not defer
 an already-authorized later step by saying you can do it next.
+When the user explicitly asks to close or quit an application, use
+quit_application and verify it exited. Never substitute hiding a window, closing
+one window, or clicking coordinates. Do not force-quit or discard unsaved work.
 Spotify existing-playlist playback and new-playlist creation are distinct: never
 create a playlist unless the requested action verb is explicitly create, make,
 build, or generate. The words "new", "discovery", and "recommendation" describe
@@ -90,11 +94,13 @@ class JarvisAssistant:
         self.voice = os.getenv("OPENAI_VOICE", "echo")
         self.tts_model = os.getenv("OPENAI_TTS_MODEL", "tts-1")
         self.previous_response_id: str | None = None
+        self.last_selected_tools: list[dict] = []
         self.task_engine = TaskEngine()
 
     def reset_session(self) -> None:
         """Start the next wake session as a fresh ChatGPT-style conversation."""
         self.previous_response_id = None
+        self.last_selected_tools = []
         self.task_engine.reset()
 
     def ask(self, question: str, request_id: str = "") -> str:
@@ -107,7 +113,15 @@ class JarvisAssistant:
             lane=self.task_engine.lane, goal=plan.goal, steps=plan.steps,
             success_criteria=plan.success_criteria, risk=plan.risk,
         )
-        selected_tools = tools.select_definitions(question)
+        request_text = question.rsplit("\nUser:", 1)[-1].strip()
+        selected_tools = tools.select_definitions(request_text)
+        continuation = request_text.lower().rstrip(".!?") in {
+            "yes", "yes please", "continue", "go ahead", "do it", "try again", "keep going", "please do",
+        }
+        if not selected_tools and continuation and self.previous_response_id:
+            selected_tools = self.last_selected_tools
+        elif selected_tools:
+            self.last_selected_tools = selected_tools
         complex_task = self.task_engine.lane == "complex"
         turn_effort = self.reasoning_effort if complex_task else "none"
         planned_input = question if not complex_task else (
@@ -251,25 +265,35 @@ class JarvisAssistant:
         raise RuntimeError("Jarvis could not verify completion within the bounded execution limit.")
 
     def transcribe(self, audio_path: Path) -> str:
-        with audio_path.open("rb") as audio:
-            result = self.client.audio.transcriptions.create(
-                model=os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe"),
-                file=audio,
-                language=os.getenv("JARVIS_LANGUAGE", "en"),
-                stream=os.getenv("JARVIS_STREAM_TRANSCRIPTION", "1") == "1",
-            )
-            if hasattr(result, "text"):
-                return result.text.strip()
-            final_text = ""
-            partial = ""
-            for event in result:
-                if getattr(event, "type", "") == "transcript.text.delta":
-                    partial += getattr(event, "delta", "")
-                    if partial.strip():
-                        activity.update("transcribing", "Hearing…", partial.strip()[-120:])
-                elif getattr(event, "type", "") == "transcript.text.done":
-                    final_text = getattr(event, "text", "")
-            return (final_text or partial).strip()
+        model = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
+        language = os.getenv("JARVIS_LANGUAGE", "en")
+        use_stream = os.getenv("JARVIS_STREAM_TRANSCRIPTION", "1") == "1"
+        try:
+            with audio_path.open("rb") as audio:
+                result = self.client.audio.transcriptions.create(
+                    model=model, file=audio, language=language, stream=use_stream,
+                )
+                if hasattr(result, "text"):
+                    return result.text.strip()
+                final_text = ""
+                partial = ""
+                for event in result:
+                    if getattr(event, "type", "") == "transcript.text.delta":
+                        partial += getattr(event, "delta", "")
+                        if partial.strip():
+                            activity.update("transcribing", "Hearing…", partial.strip()[-120:])
+                    elif getattr(event, "type", "") == "transcript.text.done":
+                        final_text = getattr(event, "text", "")
+                return (final_text or partial).strip()
+        except Exception as exc:
+            if not use_stream:
+                raise
+            diagnostics.event("streaming_transcription_failed", level="warning", error=str(exc))
+            with audio_path.open("rb") as audio:
+                result = self.client.audio.transcriptions.create(
+                    model=model, file=audio, language=language, stream=False,
+                )
+            return result.text.strip()
 
     @staticmethod
     def speech_text(text: str) -> str:
@@ -298,30 +322,64 @@ class JarvisAssistant:
         if allow_barge_in:
             from audio import BargeInMonitor
 
-            monitor_context = BargeInMonitor()
-            monitor = monitor_context.__enter__()
+            try:
+                monitor_context = BargeInMonitor()
+                monitor = monitor_context.__enter__()
+            except Exception as exc:
+                monitor_context = None
+                monitor = None
+                diagnostics.event("barge_in_unavailable", level="warning", error=str(exc))
         else:
             monitor = None
         try:
-            with self.client.audio.speech.with_streaming_response.create(
-                model=self.tts_model,
-                voice=self.voice,
-                input=text,
-                response_format="pcm",
-            ) as response:
-                pending = b""
-                with sd.RawOutputStream(samplerate=24000, channels=1, dtype="int16") as output:
-                    for chunk in response.iter_bytes(chunk_size=4096):
-                        if monitor is not None and monitor.triggered.is_set():
-                            interrupted = True
-                            break
-                        if not first_audio_delay:
-                            first_audio_delay = time.perf_counter() - request_started
-                        pending += chunk
-                        complete = len(pending) - (len(pending) % 2)
-                        if complete:
-                            output.write(pending[:complete])
-                            pending = pending[complete:]
+            try:
+                with self.client.audio.speech.with_streaming_response.create(
+                    model=self.tts_model,
+                    voice=self.voice,
+                    input=text,
+                    response_format="pcm",
+                ) as response:
+                    pending = b""
+                    started_output = False
+                    underflows = 0
+                    output_device = os.getenv("JARVIS_OUTPUT_DEVICE") or None
+                    if output_device and output_device.isdigit():
+                        output_device = int(output_device)
+                    with sd.RawOutputStream(
+                        samplerate=24000, channels=1, dtype="int16",
+                        device=output_device, latency="low",
+                    ) as output:
+                        for chunk in response.iter_bytes(chunk_size=4096):
+                            if monitor is not None and monitor.triggered.is_set():
+                                interrupted = True
+                                break
+                            pending += chunk
+                            # A small prebuffer prevents network jitter from producing
+                            # gaps while preserving a quick spoken response.
+                            if not started_output and len(pending) < 8192:
+                                continue
+                            complete = len(pending) - (len(pending) % 2)
+                            if complete:
+                                if not first_audio_delay:
+                                    first_audio_delay = time.perf_counter() - request_started
+                                underflows += int(bool(output.write(pending[:complete])))
+                                pending = pending[complete:]
+                                started_output = True
+                        if pending and not interrupted:
+                            complete = len(pending) - (len(pending) % 2)
+                            if complete:
+                                if not first_audio_delay:
+                                    first_audio_delay = time.perf_counter() - request_started
+                                underflows += int(bool(output.write(pending[:complete])))
+                    diagnostics.event("speech_stream_health", underflows=underflows, output_device=str(output_device or "default"))
+            except Exception as exc:
+                diagnostics.event("speech_stream_failed", level="warning", error=str(exc))
+                # macOS's built-in voice is a reliable last resort when the selected
+                # audio device disappears or the network TTS stream fails.
+                fallback_started = time.perf_counter()
+                subprocess.run(["/usr/bin/say", text], check=True, timeout=120)
+                if not first_audio_delay:
+                    first_audio_delay = max(0.01, time.perf_counter() - fallback_started)
             if interrupted and monitor is not None:
                 interruption_audio = monitor.capture_phrase()
         finally:

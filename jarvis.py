@@ -218,7 +218,15 @@ def main() -> int:
             activity.update("planning", "Planning…", text[:100])
             thinking_started = time.perf_counter()
             diagnostics.event("request_started", request_id=request_id, request=text[:500], complex=is_complex_request(text))
-            reply = fast_commands.execute(text) or assistant.ask(prompt, request_id=request_id)
+            try:
+                fast_reply = fast_commands.execute(text)
+            except Exception as fast_error:
+                diagnostics.event(
+                    "fast_command_fallback", level="warning", request_id=request_id,
+                    error=str(fast_error), request=text[:300],
+                )
+                fast_reply = None
+            reply = fast_reply or assistant.ask(prompt, request_id=request_id)
             thinking_seconds = time.perf_counter() - thinking_started
             diagnostics.event("request_answer_ready", request_id=request_id, duration_ms=round(thinking_seconds * 1000), response_chars=len(reply))
             print(f"Jarvis ({thinking_seconds:.1f}s thinking): {reply}")

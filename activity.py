@@ -57,7 +57,7 @@ def append_chat(role: str, text: str) -> None:
 
 def describe_tool(name: str, arguments: dict) -> tuple[str, str]:
     labels = {
-        "open_application": "OPEN APPLICATION", "browser_navigate": "NAVIGATE BROWSER",
+        "open_application": "OPEN APPLICATION", "quit_application": "CLOSE APPLICATION", "browser_navigate": "NAVIGATE BROWSER",
         "desktop_inspect": "ANALYZE BOTH SCREENS", "desktop_action": "CONTROL DESKTOP",
         "git_repositories": "SCAN REPOSITORIES", "git_status": "INSPECT CHANGES",
         "git_commit": "CREATE COMMIT", "git_commit_and_push": "COMMIT + PUSH",

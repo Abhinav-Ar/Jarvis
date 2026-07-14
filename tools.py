@@ -99,6 +99,18 @@ TOOL_DEFINITIONS = [
     },
     {
         "type": "function",
+        "name": "quit_application",
+        "description": "Quit a named macOS application normally and verify it actually exited. Use only when the user explicitly asks to close or quit the application. It does not force-quit or discard unsaved work.",
+        "parameters": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
         "name": "browser_navigate",
         "description": "Open a website directly in a Mac browser and bring the browser forward. Prefer this over desktop clicking or typing for URLs.",
         "parameters": {
@@ -371,7 +383,7 @@ TOOL_DEFINITIONS = [
 TOOL_GROUPS = {
     "web": {"get_weather", "open_search", "browser_navigate"},
     "spotify": {"spotify_control", "spotify_play_playlist", "spotify_create_discovery_playlist"},
-    "mac": {"open_application", "set_system_volume", "clipboard", "system_status", "show_notification"},
+    "mac": {"open_application", "quit_application", "set_system_volume", "clipboard", "system_status", "show_notification"},
     "productivity": {
         "create_reminder", "create_note", "create_calendar_event", "todoist_create_task",
         "create_email_draft", "find_contact", "find_files", "apple_shortcuts",
@@ -393,7 +405,7 @@ def select_definitions(request: str) -> list[dict]:
         (("weather", "news", "search", "website", "url", ".com", "safari", "browser"), "web"),
         (("reminder", "note", "calendar", "todoist", "email", "contact", "file", "shortcut"), "productivity"),
         (("light", "thermostat", "home assistant", "switch"), "home"),
-        (("open ", "launch ", "volume", "clipboard", "battery", "system status", "notification"), "mac"),
+        (("open ", "launch ", "close ", "quit ", "exit ", "volume", "clipboard", "battery", "system status", "notification"), "mac"),
     )
     for markers, group in routes:
         if any(marker in text for marker in markers):
@@ -475,6 +487,7 @@ def execute(name: str, arguments: dict) -> dict:
         "spotify_play_playlist": spotify_play_playlist,
         "spotify_create_discovery_playlist": spotify_create_discovery_playlist,
         "open_application": mac_tools.open_application,
+        "quit_application": mac_tools.quit_application,
         "browser_navigate": mac_tools.open_url,
         "set_system_volume": mac_tools.set_system_volume,
         "clipboard": mac_tools.clipboard,
@@ -507,6 +520,8 @@ def result_summary(name: str, arguments: dict, result: dict) -> str:
         return ""
     if name == "open_application":
         return f"{result.get('application') or arguments.get('name', 'The application')} is open."
+    if name == "quit_application":
+        return f"{result.get('application') or arguments.get('name', 'The application')} is closed."
     if name == "browser_navigate":
         return f"Done — {result.get('url') or arguments.get('url')} is open."
     if name == "set_system_volume":

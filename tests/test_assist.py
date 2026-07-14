@@ -67,6 +67,18 @@ class AssistantTests(unittest.TestCase):
         self.assertEqual(assistant.ask("Hello"), "Hello, Sir.")
         self.assertEqual(assistant.previous_response_id, "r1")
 
+    def test_short_followup_reuses_active_tool_lane(self):
+        answer = SimpleNamespace(id="r2", output=[], output_text="Continuing.")
+        assistant = JarvisAssistant()
+        self.bypass_planner(assistant)
+        assistant.previous_response_id = "r1"
+        assistant.last_selected_tools = [{"type": "function", "name": "spotify_control"}]
+        fake = FakeResponses([answer])
+        assistant.client = SimpleNamespace(responses=fake)
+
+        self.assertEqual(assistant.ask("Local time: now\nUser: continue"), "Continuing.")
+        self.assertEqual(fake.calls[0]["tools"], assistant.last_selected_tools)
+
     def test_function_call_result_is_sent_back(self):
         tool_call = SimpleNamespace(
             type="function_call",

@@ -40,6 +40,21 @@ class FastCommandTests(unittest.TestCase):
         self.assertEqual(fast_commands.execute("Set volume to 150"), "Volume set to 100 percent.")
         volume.assert_called_once_with(100)
 
+    @patch("project_workflow.start", return_value={"ok": True, "repository": "Jarvis", "branch": "main"})
+    def test_start_project_session_bypasses_model(self, start):
+        self.assertEqual(
+            fast_commands.execute("Start project Jarvis"),
+            "Started the Jarvis project session on main.",
+        )
+        start.assert_called_once_with("jarvis")
+
+    @patch("project_workflow.close", return_value={"ok": True, "repository": "Jarvis", "warning": "Uncommitted work remains."})
+    def test_close_project_session_bypasses_model(self, close):
+        self.assertEqual(
+            fast_commands.execute("End project session"),
+            "Closed the Jarvis project session. Uncommitted work remains.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

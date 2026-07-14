@@ -33,6 +33,10 @@ class ToolTests(unittest.TestCase):
                 "desktop_inspect", "desktop_action",
                 "git_repositories", "git_status", "git_commit_and_push",
                 "git_commit",
+                "agent_status", "memory_store", "memory_search", "memory_forget",
+                "local_knowledge_search",
+                "project_session_start", "project_session_resume", "project_session_status",
+                "project_session_close",
             }
         self.assertEqual(function_names, handler_names)
 

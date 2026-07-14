@@ -33,6 +33,28 @@ def execute(text: str) -> str | None:
         if command.startswith(prefix):
             command = command[len(prefix):]
 
+    project_match = re.fullmatch(r"(?:start|begin) (?:a )?project(?: session)? (?:for )?(.+)", command)
+    resume_match = re.fullmatch(r"resume (?:the )?(?:project )?(?:session )?(?:for )?(.+)", command)
+    if project_match or resume_match:
+        import project_workflow
+        repository = (project_match or resume_match).group(1).strip()
+        result = project_workflow.start(repository) if project_match else project_workflow.resume(repository)
+        if result.get("ok"):
+            return f"{'Started' if project_match else 'Resumed'} the {result['repository']} project session on {result['branch']}."
+        return None
+    if command in {"project status", "project session status", "what is my project status"}:
+        import project_workflow
+        result = project_workflow.status()
+        if not result.get("active"):
+            return result.get("message")
+        return f"{result['repository']} is active on {result['branch']} with {result['changed_files']} changed files."
+    if command in {"end project", "end project session", "close project session", "finish project session"}:
+        import project_workflow
+        result = project_workflow.close()
+        if result.get("ok"):
+            return f"Closed the {result['repository']} project session. {result.get('warning', '')}".strip()
+        return None
+
     if command in {"stop the music", "pause the music", "pause spotify", "stop spotify"}:
         import spot
         result = spot.control("pause")

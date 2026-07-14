@@ -79,7 +79,10 @@ class TaskEngine:
         )
         return "complex" if any(marker in text for marker in markers) else "simple"
 
-    def plan(self, client: Any, model: str, reasoning_effort: str, request: str) -> TaskPlan:
+    def plan(
+        self, client: Any, model: str, reasoning_effort: str, request: str,
+        allow_cloud: bool = True, on_response=None,
+    ) -> TaskPlan:
         self.lane = self.route(request)
         if self.lane == "simple":
             plan = TaskPlan(
@@ -110,6 +113,8 @@ class TaskEngine:
                 + request
             )
         try:
+            if not allow_cloud:
+                raise RuntimeError("Cloud planning is disabled by the local cost policy.")
             response = client.responses.create(
                 model=model,
                 reasoning={"effort": reasoning_effort},
@@ -124,6 +129,8 @@ class TaskEngine:
                     }
                 },
             )
+            if on_response is not None:
+                on_response(response)
             plan = TaskPlan(**json.loads(response.output_text))
         except Exception as exc:
             diagnostics.event("planner_fallback", level="warning", error=str(exc), request=request[:500])

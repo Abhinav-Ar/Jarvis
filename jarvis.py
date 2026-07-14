@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 import activity
 import fast_commands
 import diagnostics
+from agent_platform import initialize_platform
 
 
 def arguments() -> argparse.Namespace:
@@ -98,6 +99,7 @@ def main() -> int:
         return 2
 
     print("Starting Jarvis…", flush=True)
+    initialize_platform()
     start_desktop_control()
     activity.reset_ui()
     from assist import JarvisAssistant

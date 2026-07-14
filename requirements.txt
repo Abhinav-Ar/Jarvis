@@ -5,3 +5,4 @@ sounddevice>=0.5,<1
 requests>=2.32,<3
 spotipy>=2.25,<3
 psutil>=7.0,<8
+mlx-whisper==0.4.3

@@ -8,10 +8,13 @@ from urllib.parse import quote_plus
 
 import requests
 
+import diagnostics
 import integrations
 import mac_tools
 import desktop
 import git_tools
+import project_workflow
+from agent_platform import platform
 
 
 TOOL_DEFINITIONS = [
@@ -377,11 +380,65 @@ TOOL_DEFINITIONS = [
         },
         "strict": True,
     },
+    {
+        "type": "function", "name": "agent_status",
+        "description": "Report the local Jarvis platform status, including memory, indexed documents, workflows, jobs, capabilities, and cloud-call policy.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "memory_store",
+        "description": "Store a durable personal preference or fact only when the user explicitly asks Jarvis to remember it.",
+        "parameters": {"type": "object", "properties": {"key": {"type": "string"}, "value": {"type": "string"}}, "required": ["key", "value"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "memory_search",
+        "description": "Search user-authorized durable Jarvis memory for relevant preferences or facts.",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "memory_forget",
+        "description": "Delete one named durable memory only when the user explicitly asks Jarvis to forget it.",
+        "parameters": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "local_knowledge_search",
+        "description": "Search only files the user explicitly authorized Jarvis to index locally.",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "project_session_start",
+        "description": "Start a persistent local project session for a named Git repository, open available project apps, index its local context, and record starting state.",
+        "parameters": {"type": "object", "properties": {"repository": {"type": "string"}}, "required": ["repository"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "project_session_resume",
+        "description": "Resume a named project using its prior local session journal and current Git state.",
+        "parameters": {"type": "object", "properties": {"repository": {"type": "string"}}, "required": ["repository"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "project_session_status",
+        "description": "Report the active project session and current Git changes.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "project_session_close",
+        "description": "Close the active project session, persist a local journal, and warn about uncommitted work without committing automatically.",
+        "parameters": {"type": "object", "properties": {"notes": {"type": "string"}}, "required": ["notes"], "additionalProperties": False},
+        "strict": True,
+    },
 ]
 
 
 TOOL_GROUPS = {
-    "web": {"get_weather", "open_search", "browser_navigate"},
+    "web": {"__web_search__", "get_weather", "open_search", "browser_navigate"},
     "spotify": {"spotify_control", "spotify_play_playlist", "spotify_create_discovery_playlist"},
     "mac": {"open_application", "quit_application", "set_system_volume", "clipboard", "system_status", "show_notification"},
     "productivity": {
@@ -391,6 +448,8 @@ TOOL_GROUPS = {
     "home": {"home_assistant_control"},
     "desktop": {"open_application", "desktop_inspect", "desktop_action"},
     "git": {"open_application", "git_repositories", "git_status", "git_commit", "git_commit_and_push"},
+    "agent": {"agent_status", "memory_store", "memory_search", "memory_forget", "local_knowledge_search"},
+    "project": {"project_session_start", "project_session_resume", "project_session_status", "project_session_close", "git_status"},
 }
 
 
@@ -406,6 +465,8 @@ def select_definitions(request: str) -> list[dict]:
         (("reminder", "note", "calendar", "todoist", "email", "contact", "file", "shortcut"), "productivity"),
         (("light", "thermostat", "home assistant", "switch"), "home"),
         (("open ", "launch ", "close ", "quit ", "exit ", "volume", "clipboard", "battery", "system status", "notification"), "mac"),
+        (("remember", "forget", "memory", "what do you know", "jarvis status", "agent status", "indexed", "knowledge"), "agent"),
+        (("project session", "start project", "resume project", "end project", "close project", "project status"), "project"),
     )
     for markers, group in routes:
         if any(marker in text for marker in markers):
@@ -414,7 +475,11 @@ def select_definitions(request: str) -> list[dict]:
     # questions keep a narrow web lane.
     if not selected and any(marker in text for marker in ("today", "current", "latest", "right now")):
         selected.update(TOOL_GROUPS["web"])
-    return [definition for definition in TOOL_DEFINITIONS if definition.get("name") in selected]
+    return [
+        definition for definition in TOOL_DEFINITIONS
+        if definition.get("name") in selected
+        or (definition.get("type") == "web_search" and "__web_search__" in selected)
+    ]
 
 
 def get_weather(location: str) -> dict:
@@ -480,6 +545,7 @@ def spotify_create_discovery_playlist(name: str = "") -> dict:
 
 
 def execute(name: str, arguments: dict) -> dict:
+    diagnostics.event("safety_classified", tool=name, risk=platform().risk_for(name))
     handlers = {
         "get_weather": get_weather,
         "open_search": open_search,
@@ -508,6 +574,15 @@ def execute(name: str, arguments: dict) -> dict:
         "git_status": git_tools.status,
         "git_commit_and_push": git_tools.commit_and_push,
         "git_commit": git_tools.commit,
+        "agent_status": platform().summary,
+        "memory_store": platform().remember,
+        "memory_search": platform().search_memory,
+        "memory_forget": platform().forget,
+        "local_knowledge_search": platform().search_documents,
+        "project_session_start": project_workflow.start,
+        "project_session_resume": project_workflow.resume,
+        "project_session_status": project_workflow.status,
+        "project_session_close": project_workflow.close,
     }
     if name not in handlers:
         return {"ok": False, "error": f"Unknown tool: {name}"}
@@ -541,6 +616,17 @@ def result_summary(name: str, arguments: dict, result: dict) -> str:
         return f"Todoist task created: {arguments.get('content', 'your task')}."
     if name == "desktop_action":
         return "Done."
+    if name == "memory_store":
+        return f"I’ll remember {arguments.get('key')}."
+    if name == "memory_forget":
+        return f"I forgot {arguments.get('key')}."
+    if name == "project_session_start":
+        return f"Project session started for {result.get('repository')}."
+    if name == "project_session_resume":
+        return f"Resumed {result.get('repository')}."
+    if name == "project_session_close":
+        warning = result.get("warning", "")
+        return f"Project session closed. {warning}".strip()
     return ""
 
 

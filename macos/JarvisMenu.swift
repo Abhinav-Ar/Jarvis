@@ -17,10 +17,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private lazy var chatFile = appDirectory.appendingPathComponent(".runtime/chat.json")
     private lazy var actionsFile = appDirectory.appendingPathComponent(".runtime/actions.json")
     private lazy var contrastFile = appDirectory.appendingPathComponent(".runtime/contrast-state.json")
+    private lazy var platformFile = appDirectory.appendingPathComponent(".runtime/platform-status.json")
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
     private var detailMenuItem: NSMenuItem!
     private var desktopControlItem: NSMenuItem!
+    private var platformMenuItem: NSMenuItem!
     private var timer: Timer?
     private var hud: NSWindow?
     private var hudView: JarvisHUDView?
@@ -46,6 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         detailMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         detailMenuItem.isEnabled = false
         menu.addItem(detailMenuItem)
+        platformMenuItem = NSMenuItem(title: "Agent platform: starting…", action: nil, keyEquivalent: "")
+        platformMenuItem.isEnabled = false
+        menu.addItem(platformMenuItem)
         desktopControlItem = NSMenuItem(title: "Enable Desktop Control", action: #selector(toggleDesktopControl), keyEquivalent: "d")
         menu.addItem(desktopControlItem)
         menu.addItem(.separator())
@@ -233,6 +238,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             ]
         )
         detailMenuItem.title = detail.isEmpty ? "Desktop control: \(desktopEnabled ? "On" : "Off")" : detail
+        if let data = try? Data(contentsOf: platformFile),
+           let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let memories = value["memories"] as? Int ?? 0
+            let documents = value["documents"] as? Int ?? 0
+            let calls = value["cloud_calls_24h"] as? Int ?? 0
+            let project = value["active_project"] as? String ?? ""
+            let projectLabel = project.isEmpty ? "no active project" : "project: \(project)"
+            platformMenuItem.title = "Local agent: \(projectLabel) • \(memories) memories • \(documents) files • \(calls) cloud calls"
+        }
         statusItem.button?.attributedTitle = NSAttributedString(
             string: state == "listening" || state == "stopped" ? "● Jarvis" : "● \(label)",
             attributes: [

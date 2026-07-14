@@ -13,6 +13,7 @@ from pathlib import Path
 from openai import OpenAI
 import diagnostics
 import mac_tools
+from agent_platform import platform
 
 
 RUNTIME_DIR = Path.home() / "Library" / "Application Support" / "Jarvis" / ".runtime"
@@ -57,6 +58,10 @@ def inspect_screen(question: str, application: str = "") -> dict:
             mapping=display_mapping,
         )
         encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        agent = platform()
+        allowed, reason = agent.cloud_allowed("vision")
+        if not allowed:
+            return {"ok": False, "error": reason}
         client = OpenAI()
         response = client.responses.create(
             model=os.getenv("OPENAI_VISION_MODEL", os.getenv("OPENAI_MODEL", "gpt-5.4-mini")),
@@ -86,6 +91,9 @@ def inspect_screen(question: str, application: str = "") -> dict:
                     ],
                 }
             ],
+        )
+        agent.record_cloud(
+            "vision", os.getenv("OPENAI_VISION_MODEL", os.getenv("OPENAI_MODEL", "gpt-5.4-mini")), response
         )
         diagnostics.event(
             "desktop_vision_completed",

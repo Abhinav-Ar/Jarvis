@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -25,7 +26,7 @@ class AssistantTests(unittest.TestCase):
     @staticmethod
     def bypass_planner(assistant, requires_tools=False):
         assistant.task_engine.lane = "complex" if requires_tools else "simple"
-        assistant.task_engine.plan = lambda *args: TaskPlan(
+        assistant.task_engine.plan = lambda *args, **kwargs: TaskPlan(
             "test", requires_tools, ["done"], ["act", "verify"], "low", []
         )
 
@@ -35,6 +36,7 @@ class AssistantTests(unittest.TestCase):
         )
         self.assertEqual(spoken, "Latest: AP News and")
 
+    @patch.dict(os.environ, {"JARVIS_LOCAL_TRANSCRIPTION": "0"})
     def test_streaming_transcription_returns_completed_text(self):
         events = iter([
             SimpleNamespace(type="transcript.text.delta", delta="Hello "),
@@ -49,6 +51,28 @@ class AssistantTests(unittest.TestCase):
         try:
             self.assertEqual(assistant.transcribe(path), "Hello Jarvis")
             self.assertTrue(create.call_args.kwargs["stream"])
+        finally:
+            path.unlink(missing_ok=True)
+
+    @patch.dict(os.environ, {"JARVIS_LOCAL_TRANSCRIPTION": "1"})
+    def test_local_transcription_receives_pcm_samples_without_cloud(self):
+        transcribe = Mock(return_value={"text": "Hello locally"})
+        local_module = SimpleNamespace(transcribe=transcribe)
+        assistant = JarvisAssistant()
+        assistant.platform = Mock()
+        path = Path(tempfile.gettempdir()) / "jarvis-test-local-audio.wav"
+        with wave.open(str(path), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(16000)
+            wav.writeframes(b"\x00\x00" * 320)
+        try:
+            with patch.dict("sys.modules", {"mlx_whisper": local_module}):
+                self.assertEqual(assistant.transcribe(path), "Hello locally")
+            waveform = transcribe.call_args.args[0]
+            self.assertEqual(waveform.dtype.name, "float32")
+            self.assertEqual(len(waveform), 320)
+            assistant.platform.cloud_allowed.assert_not_called()
         finally:
             path.unlink(missing_ok=True)
 

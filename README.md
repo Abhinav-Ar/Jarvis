@@ -1,7 +1,7 @@
 # Jarvis for macOS
 
 Jarvis is a voice-driven Mac and personal assistant. It records a spoken phrase,
-transcribes it with OpenAI, reasons through the Responses API, executes bounded
+transcribes it locally on Apple silicon by default, reasons through the Responses API, executes bounded
 tools when requested, and speaks the result through the Mac's audio output.
 
 ## Capabilities
@@ -31,7 +31,7 @@ tools when requested, and speaks the result through the Mac's audio output.
   longer tasks
 - Route common local commands instantly and skip full planning and auditing for
   straightforward single-step requests
-- Spoken responses through OpenAI text-to-speech
+- Spoken responses through the built-in macOS voice by default, with optional OpenAI text-to-speech
 
 ### Mac control
 
@@ -59,6 +59,58 @@ tools when requested, and speaks the result through the Mac's audio output.
 
 Jarvis deliberately has no unrestricted terminal tool, file deletion tool,
 purchase tool, password access, or silent email/message sending.
+
+## Local-first persistent agent platform
+
+Jarvis now maintains a local SQLite agent database in `.runtime/agent.db` with:
+
+- user-authorized durable memories with explicit remember and forget operations;
+- text indexing limited to folders explicitly listed in `JARVIS_INDEX_ROOTS`;
+- reusable workflow definitions and a persistent background-job queue;
+- integration and capability health state;
+- read-only, reversible, and consequential safety classifications;
+- actual cloud-call/token accounting and a daily hard call limit;
+- a small bounded retrieval packet instead of uploading the entire local database.
+
+The menu-bar command center displays memory, indexed-file, workflow, and recent
+cloud-call counts, along with the active project session. Routine speech uses the free macOS voice by default. Set
+`JARVIS_LOCAL_SPEECH=0` only when intentionally choosing paid cloud TTS.
+
+Microphone transcription uses `mlx-whisper` and the Apple-silicon GPU by default.
+The first use downloads and caches the selected model. If the local model cannot
+run, Jarvis may fall back to OpenAI transcription when
+`JARVIS_ALLOW_TRANSCRIPTION_FALLBACK=1`. Set that value to `0` for a strict
+no-cloud transcription policy.
+
+Cloud escalation can be disabled entirely with `JARVIS_CLOUD_ENABLED=0`, or capped
+with `JARVIS_MAX_CLOUD_CALLS_PER_DAY`. The same cap covers reasoning, planning,
+screen vision, fallback transcription, and optional cloud speech. Known fast
+commands and local transcription/speech never consume the cap.
+Jarvis indexes no personal folder by default. To authorize folders, use a
+colon-separated list on macOS, for example:
+
+```dotenv
+JARVIS_INDEX_ROOTS=/Users/you/Documents/Projects:/Users/you/Documents/Notes
+JARVIS_INDEX_MAX_FILES=500
+```
+
+## Project sessions
+
+Project sessions are the first complete persistent workflow. They give Jarvis a
+durable concept of what you are working on instead of treating every command as
+an isolated chat. Say any of these:
+
+- “Jarvis, start project Jarvis” to record the branch and Git state, locally index
+  the repository, and open GitHub Desktop and Visual Studio Code when installed.
+- “Project status” during the active conversation to hear the current branch and
+  changed-file count without a model call.
+- “Resume project Jarvis” to begin from the most recently stored session notes.
+- “End project session” to save the ending state and a handoff note. Jarvis warns
+  about uncommitted work and never commits merely because a session ended.
+
+The active project survives app restarts and appears in the menu-bar command
+center. Project files stay local except for the small, relevant excerpts that are
+retrieved for a request which actually needs cloud reasoning.
 
 ## Install
 

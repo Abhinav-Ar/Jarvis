@@ -7,15 +7,18 @@ import os
 import re
 import subprocess
 import time
+import wave
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import numpy as np
 from openai import OpenAI
 import sounddevice as sd
 
 import tools
 import activity
 import diagnostics
+from agent_platform import platform
 from task_engine import TaskEngine
 
 
@@ -96,6 +99,15 @@ class JarvisAssistant:
         self.previous_response_id: str | None = None
         self.last_selected_tools: list[dict] = []
         self.task_engine = TaskEngine()
+        self.platform = platform()
+
+    def _cloud_response(self, purpose: str, **kwargs):
+        allowed, reason = self.platform.cloud_allowed(purpose)
+        if not allowed:
+            raise RuntimeError(reason)
+        response = self.client.responses.create(**kwargs)
+        self.platform.record_cloud(purpose, str(kwargs.get("model", self.model)), response)
+        return response
 
     def reset_session(self) -> None:
         """Start the next wake session as a fresh ChatGPT-style conversation."""
@@ -106,7 +118,11 @@ class JarvisAssistant:
     def ask(self, question: str, request_id: str = "") -> str:
         activity.update("planning", "Planning…")
         planning_started = time.perf_counter()
-        plan = self.task_engine.plan(self.client, self.model, self.reasoning_effort, question)
+        cloud_allowed, _ = self.platform.cloud_allowed("planning")
+        plan = self.task_engine.plan(
+            self.client, self.model, self.reasoning_effort, question, allow_cloud=cloud_allowed,
+            on_response=lambda response: self.platform.record_cloud("planning", self.model, response),
+        )
         diagnostics.event(
             "plan_created", request_id=request_id,
             duration_ms=round((time.perf_counter() - planning_started) * 1000),
@@ -114,6 +130,7 @@ class JarvisAssistant:
             success_criteria=plan.success_criteria, risk=plan.risk,
         )
         request_text = question.rsplit("\nUser:", 1)[-1].strip()
+        local_context = self.platform.context_for(request_text)
         selected_tools = tools.select_definitions(request_text)
         continuation = request_text.lower().rstrip(".!?") in {
             "yes", "yes please", "continue", "go ahead", "do it", "try again", "keep going", "please do",
@@ -124,16 +141,19 @@ class JarvisAssistant:
             self.last_selected_tools = selected_tools
         complex_task = self.task_engine.lane == "complex"
         turn_effort = self.reasoning_effort if complex_task else "none"
-        planned_input = question if not complex_task else (
+        context_suffix = ""
+        if local_context["memories"] or local_context["documents"]:
+            context_suffix = "\n\nRelevant user-authorized local context:\n" + json.dumps(local_context)
+        planned_input = (question + context_suffix) if not complex_task else (
             f"User request:\n{question}\n\nStructured task plan:\n{self.task_engine.context()}\n"
-            "Execute the entire plan now. Do not merely describe it."
+            "Execute the entire plan now. Do not merely describe it." + context_suffix
         )
         diagnostics.event(
             "tool_lane_selected", request_id=request_id, lane=self.task_engine.lane,
-            tools=[definition["name"] for definition in selected_tools], reasoning=turn_effort,
+            tools=[definition.get("name", definition.get("type", "tool")) for definition in selected_tools], reasoning=turn_effort,
         )
         model_started = time.perf_counter()
-        response = self.client.responses.create(
+        response = self._cloud_response("assistant",
             model=self.model,
             reasoning={"effort": turn_effort},
             instructions=SYSTEM_PROMPT,
@@ -157,7 +177,7 @@ class JarvisAssistant:
                     activity.update("verifying", "Checking…")
                     diagnostics.event("completion_audit_started", request_id=request_id)
                     audit_started = time.perf_counter()
-                    response = self.client.responses.create(
+                    response = self._cloud_response("verification",
                         model=self.model,
                         reasoning={"effort": turn_effort},
                         instructions=SYSTEM_PROMPT,
@@ -246,7 +266,7 @@ class JarvisAssistant:
                     )
                     return answer
 
-            response = self.client.responses.create(
+            response = self._cloud_response("tool_followup",
                 model=self.model,
                 reasoning={"effort": turn_effort},
                 instructions=SYSTEM_PROMPT,
@@ -268,13 +288,42 @@ class JarvisAssistant:
         model = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
         language = os.getenv("JARVIS_LANGUAGE", "en")
         use_stream = os.getenv("JARVIS_STREAM_TRANSCRIPTION", "1") == "1"
+        if os.getenv("JARVIS_LOCAL_TRANSCRIPTION", "1") == "1":
+            try:
+                import mlx_whisper
+                local_model = os.getenv("JARVIS_LOCAL_TRANSCRIBE_MODEL", "mlx-community/whisper-tiny")
+                # Passing the recorder's PCM samples directly avoids mlx-whisper's
+                # optional ffmpeg file-decoding dependency. Jarvis records exactly
+                # this mono, 16 kHz, signed 16-bit WAV format.
+                with wave.open(str(audio_path), "rb") as wav:
+                    if wav.getnchannels() != 1 or wav.getsampwidth() != 2 or wav.getframerate() != 16000:
+                        raise ValueError("Local transcription requires mono 16 kHz 16-bit PCM audio.")
+                    waveform = np.frombuffer(wav.readframes(wav.getnframes()), dtype=np.int16)
+                    waveform = waveform.astype(np.float32) / 32768.0
+                result = mlx_whisper.transcribe(
+                    waveform, path_or_hf_repo=local_model, language=language,
+                    condition_on_previous_text=False, verbose=False,
+                )
+                text = str(result.get("text", "")).strip()
+                if text:
+                    diagnostics.event("local_transcription_completed", model=local_model, characters=len(text))
+                    return text
+            except Exception as exc:
+                diagnostics.event("local_transcription_failed", level="warning", error=str(exc))
+                if os.getenv("JARVIS_ALLOW_TRANSCRIPTION_FALLBACK", "1") != "1":
+                    raise RuntimeError("Local transcription failed and cloud fallback is disabled.") from exc
+        allowed, reason = self.platform.cloud_allowed("transcription")
+        if not allowed:
+            raise RuntimeError(reason)
         try:
             with audio_path.open("rb") as audio:
                 result = self.client.audio.transcriptions.create(
                     model=model, file=audio, language=language, stream=use_stream,
                 )
                 if hasattr(result, "text"):
-                    return result.text.strip()
+                    text = result.text.strip()
+                    self.platform.record_cloud_event("transcription", model)
+                    return text
                 final_text = ""
                 partial = ""
                 for event in result:
@@ -284,7 +333,9 @@ class JarvisAssistant:
                             activity.update("transcribing", "Hearing…", partial.strip()[-120:])
                     elif getattr(event, "type", "") == "transcript.text.done":
                         final_text = getattr(event, "text", "")
-                return (final_text or partial).strip()
+                text = (final_text or partial).strip()
+                self.platform.record_cloud_event("transcription", model)
+                return text
         except Exception as exc:
             if not use_stream:
                 raise
@@ -293,7 +344,9 @@ class JarvisAssistant:
                 result = self.client.audio.transcriptions.create(
                     model=model, file=audio, language=language, stream=False,
                 )
-            return result.text.strip()
+            text = result.text.strip()
+            self.platform.record_cloud_event("transcription", model)
+            return text
 
     @staticmethod
     def speech_text(text: str) -> str:
@@ -314,7 +367,12 @@ class JarvisAssistant:
         if not text or os.getenv("JARVIS_MUTE", "0") == "1":
             return 0.0, False, None
         text = self.speech_text(text)
+        if os.getenv("JARVIS_LOCAL_SPEECH", "1") == "1":
+            return self._speak_local(text, allow_barge_in)
         request_started = time.perf_counter()
+        allowed, reason = self.platform.cloud_allowed("speech")
+        if not allowed:
+            raise RuntimeError(reason)
         first_audio_delay = 0.0
         interrupted = False
         interruption_audio = None
@@ -372,6 +430,7 @@ class JarvisAssistant:
                                     first_audio_delay = time.perf_counter() - request_started
                                 underflows += int(bool(output.write(pending[:complete])))
                     diagnostics.event("speech_stream_health", underflows=underflows, output_device=str(output_device or "default"))
+                    self.platform.record_cloud_event("speech", self.tts_model)
             except Exception as exc:
                 diagnostics.event("speech_stream_failed", level="warning", error=str(exc))
                 # macOS's built-in voice is a reliable last resort when the selected
@@ -390,6 +449,48 @@ class JarvisAssistant:
             first_audio_ms=round(first_audio_delay * 1000), interrupted=interrupted, characters=len(text),
         )
         return first_audio_delay, interrupted, interruption_audio
+
+    def _speak_local(self, text: str, allow_barge_in: bool) -> tuple[float, bool, Path | None]:
+        """Free on-device speech with interruption support."""
+        request_started = time.perf_counter()
+        monitor_context = None
+        monitor = None
+        if allow_barge_in:
+            try:
+                from audio import BargeInMonitor
+                monitor_context = BargeInMonitor()
+                monitor = monitor_context.__enter__()
+            except Exception as exc:
+                diagnostics.event("barge_in_unavailable", level="warning", error=str(exc))
+        command = ["/usr/bin/say"]
+        voice = os.getenv("JARVIS_MACOS_VOICE", "").strip()
+        if voice:
+            command += ["-v", voice]
+        command.append(text)
+        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        interrupted = False
+        interruption_audio = None
+        try:
+            while process.poll() is None:
+                if monitor is not None and monitor.triggered.is_set():
+                    interrupted = True
+                    process.terminate()
+                    break
+                time.sleep(0.04)
+            process.wait(timeout=5)
+            if interrupted and monitor is not None:
+                interruption_audio = monitor.capture_phrase()
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            if monitor_context is not None:
+                monitor_context.__exit__(None, None, None)
+        duration = time.perf_counter() - request_started
+        diagnostics.event(
+            "local_speech_finished", duration_ms=round(duration * 1000),
+            interrupted=interrupted, characters=len(text),
+        )
+        return min(0.08, duration), interrupted, interruption_audio
 
 
 _default: JarvisAssistant | None = None

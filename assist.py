@@ -22,7 +22,11 @@ from agent_platform import platform
 from task_engine import TaskEngine
 
 
-SYSTEM_PROMPT = """You are Jarvis, a concise, warm, capable voice assistant.
+def _setting(name: str, default: str = "") -> str:
+    return os.getenv(f"ORION_{name}", os.getenv(f"JARVIS_{name}", default))
+
+
+SYSTEM_PROMPT = """You are ORION (One Really Intelligent Operating Network), a concise, warm, capable voice assistant.
 Address the user naturally. Because answers are spoken aloud, default to at most
 45 words and three compact points unless detail is explicitly requested. Do not
 include raw URLs in prose; citations may remain attached to displayed text.
@@ -33,6 +37,17 @@ do next. Never dump internal plans or diagnostic bookkeeping.
 Use tools when the user asks for current research, weather, searches, Mac actions,
 Apple apps, Spotify, Todoist, or Home Assistant. Only perform actions that the
 user explicitly requested; never infer a side effect from casual conversation.
+An explicit request to install an application authorizes install_application with
+confirmed true. Use the trusted installer instead of merely opening a download page.
+Never promise a future action unless a tool result proves that a background job
+actually started. Never report an action complete without successful tool evidence.
+Treat the user's request as an objective, not a request to choose or describe
+workers. Automatically compose the smallest temporary team from ORION's capability
+families. Do not ask the user to name internal workers, adapters, formulas, sheets,
+or implementation steps. Ask only for a missing credential, consequential approval,
+or personal value that cannot be safely inferred. For cross-family objectives,
+compile the objective, use every available family needed, and return the finished
+artifact or one precise prerequisite—not a menu of possible approaches.
 Treat a multi-part request as one persistent goal: make a short internal plan,
 execute every authorized step in order, inspect tool results, diagnose blockers,
 and continue until the requested outcome is complete or genuinely impossible.
@@ -68,6 +83,17 @@ An explicit request containing both "commit" and "push" is confirmation for that
 operation; do not ask again. Opening GitHub Desktop may be an additional first
 step when requested, but it is not a substitute for completing the Git operation.
 For a commit-only request, use git_commit and never call git_commit_and_push.
+When the user explicitly asks ORION to build, implement, refactor, fix, or generate
+code in a named repository, codex_generate may delegate the work to the local Codex
+worker. It edits only that repository in workspace-write mode, runs asynchronously,
+and never authorizes a commit or push. Report the job identifier and let ORION monitor
+it instead of pretending the requested artifact is already complete.
+Google Workspace is an artifact adapter, not a separate assistant. A request to
+create a finance or budgeting spreadsheet should use the budget template and create
+the complete Drive artifact in one operation; the user does not need to specify
+tabs, formulas, validation, formatting, or charts. Never claim creation when Google
+authorization is unavailable, and never replace the requested Drive artifact with
+a local file unless the user agrees.
 Use screen inspection and desktop actions only as a fallback when no semantic tool
 can do the job. Text the user explicitly asked you to type is confirmed, but typing
 does not authorize submitting it. If an app fails to become frontmost, retry using
@@ -104,7 +130,7 @@ the user did not authorize.
 """
 
 
-class JarvisAssistant:
+class OrionAssistant:
     def __init__(self) -> None:
         self.client = OpenAI()
         self.model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
@@ -150,18 +176,28 @@ class JarvisAssistant:
     def ask(self, question: str, request_id: str = "") -> str:
         activity.update("planning", "Planning…")
         planning_started = time.perf_counter()
+        request_text = question.rsplit("\nUser:", 1)[-1].strip()
+        prior_task = self.task_engine.record
+        resuming_pending_action = bool(
+            prior_task and prior_task.plan.requires_tools
+            and prior_task.status in {"planned", "executing", "awaiting_input"}
+        )
         cloud_allowed, _ = self.platform.cloud_allowed("planning")
         plan = self.task_engine.plan(
-            self.client, self.model, self.reasoning_effort, question, allow_cloud=cloud_allowed,
+            self.client, self.model, self.reasoning_effort, request_text, allow_cloud=cloud_allowed,
             on_response=lambda response: self.platform.record_cloud("planning", self.model, response),
         )
+        try:
+            from orion_kernel import kernel
+            kernel().adopt_plan(plan.goal, plan.steps, plan.success_criteria, plan.risk)
+        except Exception as exc:
+            diagnostics.event("kernel_plan_sync_failed", level="warning", request_id=request_id, error=str(exc))
         diagnostics.event(
             "plan_created", request_id=request_id,
             duration_ms=round((time.perf_counter() - planning_started) * 1000),
             lane=self.task_engine.lane, goal=plan.goal, steps=plan.steps,
             success_criteria=plan.success_criteria, risk=plan.risk,
         )
-        request_text = question.rsplit("\nUser:", 1)[-1].strip()
         local_context = self.platform.context_for(request_text)
         normalized_followup = " ".join(re.sub(r"[^a-z0-9 ]", " ", request_text.lower()).split())
         continuation = normalized_followup in {
@@ -179,8 +215,19 @@ class JarvisAssistant:
             selected_tools = self.last_selected_tools
         elif selected_tools:
             self.last_selected_tools = selected_tools
+        if continuation and selected_tools and resuming_pending_action:
+            plan.requires_tools = True
+        if plan.requires_tools and not selected_tools:
+            answer = "I can’t perform that action yet because I don’t have an executable capability for it. I didn’t make any changes."
+            self.task_engine.finish("blocked")
+            diagnostics.event(
+                "capability_gap_blocked", level="warning", request_id=request_id,
+                request=request_text[:500], answer_chars=len(answer),
+            )
+            return answer
         complex_task = self.task_engine.lane == "complex"
-        turn_effort = self.reasoning_effort if complex_task else "none"
+        simple_default = "none" if self.model.startswith("gpt-5.4") else "minimal"
+        turn_effort = self.reasoning_effort if complex_task else os.getenv("OPENAI_SIMPLE_REASONING_EFFORT", simple_default)
         context_suffix = ""
         if any(local_context.values()):
             context_suffix = "\n\nRelevant user-authorized local context:\n" + json.dumps(local_context)
@@ -215,11 +262,12 @@ class JarvisAssistant:
 
         # Continue through action, recovery, and evidence-based final verification.
         tools_since_audit = False
+        action_effect_evidence = False
         audit_performed = False
         for _ in range(8):
             calls = [item for item in response.output if item.type == "function_call"]
             if not calls:
-                if complex_task and plan.requires_tools and (tools_since_audit or not audit_performed):
+                if plan.requires_tools and (tools_since_audit or not audit_performed):
                     activity.update("verifying", "Checking…")
                     diagnostics.event("completion_audit_started", request_id=request_id)
                     audit_started = time.perf_counter()
@@ -247,6 +295,18 @@ class JarvisAssistant:
                     continue
                 self.previous_response_id = response.id
                 answer = response.output_text.strip() or "I don't have a response for that."
+                if plan.requires_tools and not action_effect_evidence:
+                    if answer.rstrip().endswith("?"):
+                        self.task_engine.finish("awaiting_input")
+                        diagnostics.event("action_waiting_for_input", request_id=request_id, answer_chars=len(answer))
+                        return answer
+                    answer = "I couldn’t execute that request because no action ran. I didn’t make any changes."
+                    self.task_engine.finish("blocked")
+                    diagnostics.event(
+                        "unevidenced_action_blocked", level="warning", request_id=request_id,
+                        model_answer=response.output_text[:500],
+                    )
+                    return answer
                 if not plan.requires_tools:
                     status = "answered"
                 elif answer.rstrip().endswith("?"):
@@ -300,6 +360,8 @@ class JarvisAssistant:
                     outputs = list(executor.map(run_call, calls))
             else:
                 outputs = [run_call(call) for call in calls]
+            if any(tools.is_action_evidence(name, arguments, result) for name, arguments, result in completed_calls):
+                action_effect_evidence = True
 
             opened_apps = list(dict.fromkeys(
                 str(result.get("application") or arguments.get("name") or "").strip()
@@ -324,6 +386,7 @@ class JarvisAssistant:
             locally_final_tools = {
                 "quit_application", "browser_navigate", "set_system_volume", "show_notification",
                 "spotify_control", "spotify_play_playlist", "create_reminder", "create_note",
+                "install_application", "installation_status",
             }
             if re.match(r"^\s*(?:open|launch|start)\b", request_text, re.IGNORECASE):
                 locally_final_tools.add("open_application")
@@ -341,6 +404,20 @@ class JarvisAssistant:
                         tools=[name for name, _, _ in completed_calls], answer_chars=len(answer),
                     )
                     return answer
+
+            generated = next(
+                ((name, arguments, result) for name, arguments, result in completed_calls
+                 if name == "codex_generate" and result.get("ok")),
+                None,
+            )
+            if generated:
+                answer = tools.result_summary(*generated)
+                self.task_engine.finish("delegated")
+                diagnostics.event(
+                    "generation_delegated", request_id=request_id,
+                    job_id=generated[2].get("job_id", ""), repository=generated[2].get("repository", ""),
+                )
+                return answer
 
             # A structured, known blocker does not benefit from another model
             # round-trip. Preserve the evidence and ask only for the missing
@@ -371,16 +448,16 @@ class JarvisAssistant:
 
         self.task_engine.finish("blocked")
         diagnostics.event("execution_limit_reached", level="error", request_id=request_id, rounds=8)
-        raise RuntimeError("Jarvis could not verify completion within the bounded execution limit.")
+        raise RuntimeError("ORION could not verify completion within the bounded execution limit.")
 
     def transcribe(self, audio_path: Path) -> str:
         model = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
-        language = os.getenv("JARVIS_LANGUAGE", "en")
-        use_stream = os.getenv("JARVIS_STREAM_TRANSCRIPTION", "1") == "1"
-        if os.getenv("JARVIS_LOCAL_TRANSCRIPTION", "1") == "1":
+        language = _setting("LANGUAGE", "en")
+        use_stream = _setting("STREAM_TRANSCRIPTION", "1") == "1"
+        if _setting("LOCAL_TRANSCRIPTION", "1") == "1":
             try:
                 import mlx_whisper
-                local_model = os.getenv("JARVIS_LOCAL_TRANSCRIBE_MODEL", "mlx-community/whisper-tiny")
+                local_model = _setting("LOCAL_TRANSCRIBE_MODEL", "mlx-community/whisper-tiny")
                 # Passing the recorder's PCM samples directly avoids mlx-whisper's
                 # optional ffmpeg file-decoding dependency. Jarvis records exactly
                 # this mono, 16 kHz, signed 16-bit WAV format.
@@ -401,7 +478,7 @@ class JarvisAssistant:
                     return text
             except Exception as exc:
                 diagnostics.event("local_transcription_failed", level="warning", error=str(exc))
-                if os.getenv("JARVIS_ALLOW_TRANSCRIPTION_FALLBACK", "1") != "1":
+                if _setting("ALLOW_TRANSCRIPTION_FALLBACK", "1") != "1":
                     raise RuntimeError("Local transcription failed and cloud fallback is disabled.") from exc
         allowed, reason = self.platform.cloud_allowed("transcription")
         if not allowed:
@@ -475,7 +552,7 @@ class JarvisAssistant:
         text = re.sub(r"[*_`#]", "", text)
         text = re.sub(r"\n\s*[-•]\s*", ". ", text)
         text = re.sub(r"\s+", " ", text).strip()
-        limit = int(os.getenv("JARVIS_MAX_SPOKEN_CHARS", "500"))
+        limit = int(_setting("MAX_SPOKEN_CHARS", "500"))
         if len(text) > limit:
             boundary = text.rfind(". ", 0, limit)
             text = text[: boundary + 1 if boundary > limit // 2 else limit].rstrip()
@@ -483,10 +560,10 @@ class JarvisAssistant:
         return text
 
     def speak(self, text: str, allow_barge_in: bool = False) -> tuple[float, bool, Path | None]:
-        if not text or os.getenv("JARVIS_MUTE", "0") == "1":
+        if not text or _setting("MUTE", "0") == "1":
             return 0.0, False, None
         text = self.speech_text(text)
-        if os.getenv("JARVIS_LOCAL_SPEECH", "1") == "1":
+        if _setting("LOCAL_SPEECH", "1") == "1":
             return self._speak_local(text, allow_barge_in)
         request_started = time.perf_counter()
         allowed, reason = self.platform.cloud_allowed("speech")
@@ -519,7 +596,7 @@ class JarvisAssistant:
                     pending = b""
                     started_output = False
                     underflows = 0
-                    output_device = os.getenv("JARVIS_OUTPUT_DEVICE") or None
+                    output_device = _setting("OUTPUT_DEVICE") or None
                     if output_device and output_device.isdigit():
                         output_device = int(output_device)
                     with sd.RawOutputStream(
@@ -582,7 +659,7 @@ class JarvisAssistant:
             except Exception as exc:
                 diagnostics.event("barge_in_unavailable", level="warning", error=str(exc))
         command = ["/usr/bin/say"]
-        voice = os.getenv("JARVIS_MACOS_VOICE", "").strip()
+        voice = _setting("MACOS_VOICE").strip()
         if voice:
             command += ["-v", voice]
         command.append(text)
@@ -612,13 +689,16 @@ class JarvisAssistant:
         return min(0.08, duration), interrupted, interruption_audio
 
 
-_default: JarvisAssistant | None = None
+JarvisAssistant = OrionAssistant
 
 
-def _assistant() -> JarvisAssistant:
+_default: OrionAssistant | None = None
+
+
+def _assistant() -> OrionAssistant:
     global _default
     if _default is None:
-        _default = JarvisAssistant()
+        _default = OrionAssistant()
     return _default
 
 

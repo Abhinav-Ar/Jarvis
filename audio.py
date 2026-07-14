@@ -15,15 +15,19 @@ import numpy as np
 import sounddevice as sd
 
 
+def _setting(name: str, default: str = "") -> str:
+    return os.getenv(f"ORION_{name}", os.getenv(f"JARVIS_{name}", default))
+
+
 class PhraseRecorder:
     def __init__(self) -> None:
-        self.rate = int(os.getenv("JARVIS_SAMPLE_RATE", "16000"))
+        self.rate = int(_setting("SAMPLE_RATE", "16000"))
         self.block_ms = 20
         self.blocksize = self.rate * self.block_ms // 1000
-        self.threshold = float(os.getenv("JARVIS_ENERGY_THRESHOLD", "500"))
-        self.silence_blocks = max(1, int(float(os.getenv("JARVIS_SILENCE_SECONDS", "1.4")) * 1000 / self.block_ms))
-        self.max_blocks = max(1, int(float(os.getenv("JARVIS_MAX_PHRASE_SECONDS", "30")) * 1000 / self.block_ms))
-        device = os.getenv("JARVIS_INPUT_DEVICE")
+        self.threshold = float(_setting("ENERGY_THRESHOLD", "500"))
+        self.silence_blocks = max(1, int(float(_setting("SILENCE_SECONDS", "1.4")) * 1000 / self.block_ms))
+        self.max_blocks = max(1, int(float(_setting("MAX_PHRASE_SECONDS", "30")) * 1000 / self.block_ms))
+        device = _setting("INPUT_DEVICE")
         self.device = int(device) if device and device.isdigit() else device or None
 
     @staticmethod
@@ -80,13 +84,13 @@ class BargeInMonitor:
     """Detect sustained nearby speech while Jarvis is playing audio."""
 
     def __init__(self) -> None:
-        self.rate = int(os.getenv("JARVIS_SAMPLE_RATE", "16000"))
+        self.rate = int(_setting("SAMPLE_RATE", "16000"))
         self.block_ms = 20
         self.blocksize = self.rate * self.block_ms // 1000
-        self.minimum_threshold = float(os.getenv("JARVIS_BARGE_IN_THRESHOLD", "450"))
-        self.threshold_ratio = float(os.getenv("JARVIS_BARGE_IN_THRESHOLD_RATIO", "1.7"))
-        self.required_blocks = max(2, int(float(os.getenv("JARVIS_BARGE_IN_SECONDS", "0.12")) * 1000 / self.block_ms))
-        self.grace_seconds = float(os.getenv("JARVIS_BARGE_IN_GRACE_SECONDS", "0.5"))
+        self.minimum_threshold = float(_setting("BARGE_IN_THRESHOLD", "450"))
+        self.threshold_ratio = float(_setting("BARGE_IN_THRESHOLD_RATIO", "1.7"))
+        self.required_blocks = max(2, int(float(_setting("BARGE_IN_SECONDS", "0.12")) * 1000 / self.block_ms))
+        self.grace_seconds = float(_setting("BARGE_IN_GRACE_SECONDS", "0.5"))
         self.triggered = threading.Event()
         self.phrase_complete = threading.Event()
         self._loud_blocks = 0
@@ -97,9 +101,9 @@ class BargeInMonitor:
         self.last_level = 0.0
         self._pre_roll = collections.deque(maxlen=max(1, 300 // self.block_ms))
         self._recorded: list[bytes] = []
-        self._phrase_threshold = float(os.getenv("JARVIS_ENERGY_THRESHOLD", "250"))
-        self._silence_blocks = max(1, int(float(os.getenv("JARVIS_SILENCE_SECONDS", "1.4")) * 1000 / self.block_ms))
-        device = os.getenv("JARVIS_INPUT_DEVICE")
+        self._phrase_threshold = float(_setting("ENERGY_THRESHOLD", "250"))
+        self._silence_blocks = max(1, int(float(_setting("SILENCE_SECONDS", "1.4")) * 1000 / self.block_ms))
+        device = _setting("INPUT_DEVICE")
         self.device = int(device) if device and device.isdigit() else device or None
         self._stream = None
 
@@ -132,7 +136,7 @@ class BargeInMonitor:
     def capture_phrase(self) -> Path | None:
         if not self.triggered.is_set():
             return None
-        self.phrase_complete.wait(timeout=float(os.getenv("JARVIS_MAX_PHRASE_SECONDS", "30")))
+        self.phrase_complete.wait(timeout=float(_setting("MAX_PHRASE_SECONDS", "30")))
         if not self._recorded:
             return None
         path = Path(tempfile.gettempdir()) / "jarvis-interruption.wav"

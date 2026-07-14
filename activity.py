@@ -12,7 +12,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-RUNTIME = Path(os.getenv("JARVIS_RUNTIME_DIR", Path.home() / "Library/Application Support/Jarvis/.runtime"))
+def _setting(name: str, default: str = "") -> str:
+    return os.getenv(f"ORION_{name}", os.getenv(f"JARVIS_{name}", default))
+
+
+RUNTIME = Path(_setting("RUNTIME_DIR", str(Path.home() / "Library/Application Support/Jarvis/.runtime")))
 STATE_FILE = RUNTIME / "activity.json"
 CHAT_FILE = RUNTIME / "chat.json"
 ACTION_FILE = RUNTIME / "actions.json"
@@ -155,7 +159,7 @@ def record_step(label: str, target: str, result: dict) -> None:
 
 def announce(message: str, key: str = "", minimum_interval: float = 8.0) -> None:
     """Speak only meaningful milestones, with de-duplication to avoid chatter."""
-    if os.getenv("JARVIS_PROGRESS_SPEECH", "1") != "1" or not message.strip():
+    if _setting("PROGRESS_SPEECH", "1") != "1" or not message.strip():
         return
     identity = key or message.lower().strip()
     with _announcement_lock:
@@ -177,7 +181,7 @@ def cue(kind: str) -> None:
         "error": "/System/Library/Sounds/Basso.aiff",
     }
     sound = sounds.get(kind)
-    if sound and Path(sound).exists() and os.getenv("JARVIS_CUES", "1") == "1":
+    if sound and Path(sound).exists() and _setting("CUES", "1") == "1":
         subprocess.Popen(
             ["/usr/bin/afplay", sound],
             stdout=subprocess.DEVNULL,
@@ -186,7 +190,7 @@ def cue(kind: str) -> None:
 
 
 def acknowledge() -> None:
-    if os.getenv("JARVIS_PROGRESS_SPEECH", "1") == "1":
+    if _setting("PROGRESS_SPEECH", "1") == "1":
         subprocess.Popen(
             ["/usr/bin/say", "On it."],
             stdout=subprocess.DEVNULL,

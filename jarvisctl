@@ -15,11 +15,11 @@ case "$COMMAND" in
     else
       launchctl bootstrap "gui/$UID" "$HOME/Library/LaunchAgents/$LABEL.plist"
     fi
-    echo "Jarvis started."
+    echo "ORION started."
     ;;
   stop)
     launchctl bootout "$SERVICE" 2>/dev/null || true
-    echo "Jarvis stopped. Use './jarvisctl start' to enable it again."
+    echo "ORION stopped. Use './orionctl start' to enable it again."
     ;;
   restart)
     if launchctl print "$SERVICE" >/dev/null 2>&1; then
@@ -28,22 +28,22 @@ case "$COMMAND" in
       launchctl enable "$SERVICE"
       launchctl bootstrap "gui/$UID" "$HOME/Library/LaunchAgents/$LABEL.plist"
     fi
-    echo "Jarvis restarted."
+    echo "ORION restarted."
     ;;
   status)
     if launchctl print "$SERVICE" >/dev/null 2>&1; then
       DETAILS="$(launchctl print "$SERVICE")"
       if [[ "$DETAILS" == *"state = running"* ]]; then
         PID="$(echo "$DETAILS" | awk '/pid =/{print $3; exit}')"
-        echo "Jarvis is running${PID:+ (PID $PID)}."
+        echo "ORION is running${PID:+ (PID $PID)}."
       else
-        echo "Jarvis is installed but stopped. Start it with './jarvisctl start'."
+        echo "ORION is installed but stopped. Start it with './orionctl start'."
       fi
     else
       if [[ -f "$HOME/Library/LaunchAgents/$LABEL.plist" ]]; then
-        echo "Jarvis is installed but stopped. Start it with './jarvisctl start'."
+        echo "ORION is installed but stopped. Start it with './orionctl start'."
       else
-        echo "Jarvis is not installed as a background service."
+        echo "ORION is not installed as a background service."
         exit 1
       fi
     fi
@@ -53,7 +53,7 @@ case "$COMMAND" in
     ERROR_FILE="$APP_DIR/.runtime/jarvis-error.log"
     EVENT_FILE="$APP_DIR/.runtime/events.jsonl"
     if [[ ! -f "$LOG_FILE" || ! -f "$ERROR_FILE" ]]; then
-      echo "Jarvis log files do not exist yet. Start Jarvis and try again."
+      echo "ORION log files do not exist yet. Start ORION and try again."
       exit 1
     fi
     if [[ "${2:-}" == "--follow" ]]; then
@@ -65,11 +65,19 @@ case "$COMMAND" in
         echo "Structured diagnostic events:"
         tail -n 100 "$EVENT_FILE"
       fi
-      echo "Use './jarvisctl logs --follow' for a continuous live view."
+      echo "Use './orionctl logs --follow' for a continuous live view."
     fi
     ;;
+  replay)
+    if [[ ! -x "$APP_DIR/.venv/bin/python" || ! -f "$APP_DIR/orion_replay.py" ]]; then
+      echo "ORION replay is not installed yet. Run ./install-background.sh."
+      exit 1
+    fi
+    shift
+    "$APP_DIR/.venv/bin/python" "$APP_DIR/orion_replay.py" "$@"
+    ;;
   *)
-    echo "Usage: ./jarvisctl {start|stop|restart|status|logs [--follow]}"
+    echo "Usage: ./orionctl {start|stop|restart|status|logs [--follow]|replay [--query text] [--limit number]}"
     exit 2
     ;;
 esac

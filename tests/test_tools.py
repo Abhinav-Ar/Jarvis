@@ -40,6 +40,11 @@ class ToolTests(unittest.TestCase):
                 "local_knowledge_search",
                 "project_session_start", "project_session_resume", "project_session_status",
                 "project_session_close",
+                "orion_goal_status", "orion_world_state", "orion_workflows", "orion_teach_workflow",
+                "codex_generate", "generation_status", "generation_cancel",
+                "capability_families_status", "objective_compile", "google_drive_search",
+                "google_create_spreadsheet", "google_create_document", "google_create_presentation",
+                "install_application", "installation_status",
             }
         self.assertEqual(function_names, handler_names)
 
@@ -51,6 +56,15 @@ class ToolTests(unittest.TestCase):
 
     def test_general_conversation_sends_no_tools(self):
         self.assertEqual(tools.select_definitions("Tell me a short joke"), [])
+
+    def test_install_request_selects_native_installer(self):
+        names = {definition["name"] for definition in tools.select_definitions("Install Blender on my laptop")}
+        self.assertIn("install_application", names)
+        self.assertIn("installation_status", names)
+
+    def test_read_only_tool_is_not_action_evidence(self):
+        self.assertFalse(tools.is_action_evidence("find_files", {}, {"ok": True, "files": ["x"]}))
+        self.assertTrue(tools.is_action_evidence("install_application", {}, {"ok": True, "status": "running"}))
 
     @patch.dict("os.environ", {}, clear=True)
     def test_optional_integrations_fail_cleanly_without_secrets(self):

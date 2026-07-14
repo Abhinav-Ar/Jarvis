@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Jarvis Menu</string>
+    <string>ORION</string>
     <key>CFBundleDisplayName</key>
-    <string>Jarvis Menu</string>
+    <string>ORION</string>
     <key>CFBundleIdentifier</key>
     <string>com.jarvis.menu</string>
     <key>CFBundleVersion</key>
@@ -19,6 +19,6 @@
     <key>LSUIElement</key>
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>Jarvis uses screen capture only when you explicitly ask it to inspect your screen.</string>
+    <string>ORION uses screen capture only when you explicitly ask it to inspect your screen.</string>
 </dict>
 </plist>

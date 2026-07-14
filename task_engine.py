@@ -27,7 +27,7 @@ PLAN_SCHEMA = {
     "additionalProperties": False,
 }
 
-PLANNER_PROMPT = """You are Jarvis's task planner. Convert the user's request into
+PLANNER_PROMPT = """You are ORION's task planner. Convert the user's request into
 a complete execution plan before any actions occur. Work backward from observable
 success. Insert necessary prerequisites the user did not spell out when they are
 safe, reversible, and logically required. Examples include opening an application,
@@ -66,7 +66,7 @@ class TaskRecord:
 
 class TaskEngine:
     def __init__(self) -> None:
-        runtime = Path(os.getenv("JARVIS_RUNTIME_DIR", Path.home() / "Library/Application Support/Jarvis/.runtime"))
+        runtime = Path(os.getenv("ORION_RUNTIME_DIR") or os.getenv("JARVIS_RUNTIME_DIR") or Path.home() / "Library/Application Support/Jarvis/.runtime")
         self.state_path = runtime / "active-task.json"
         self.record: TaskRecord | None = None
         self.lane = "simple"
@@ -77,6 +77,36 @@ class TaskEngine:
                 self.record.task_id, self.record.request, self.record.plan.goal,
                 "model" if self.lane == "complex" else "direct",
             )
+
+    @staticmethod
+    def action_requested(request: str) -> bool:
+        """Return whether the user is asking ORION to change external state."""
+        text = " ".join(request.lower().split())
+        if not text:
+            return False
+        informational = (
+            "how do i ", "how can i ", "how would i ", "tell me how ",
+            "what happens if ", "what is ", "what are ", "why ",
+        )
+        if any(text.startswith(prefix) for prefix in informational):
+            return False
+        action_markers = (
+            "install ", "download ", "open ", "launch ", "close ", "quit ",
+            "play ", "pause ", "resume ", "skip ", "set ", "change ",
+            "create ", "make ", "build ", "generate ", "write ", "type ",
+            "click ", "press ", "fill ", "submit ", "send ", "draft ",
+            "delete ", "remove ", "move ", "copy ", "rename ", "organize ",
+            "arrange ", "commit ", "push ", "pull ", "run ", "start ",
+            "stop ", "turn on ", "turn off ", "add ", "schedule ", "remind ",
+        )
+        return any(
+            text.startswith(marker)
+            or text.startswith("please " + marker)
+            or text.startswith("can you " + marker)
+            or text.startswith("could you " + marker)
+            or text.startswith("i want you to " + marker)
+            for marker in action_markers
+        )
 
     @staticmethod
     def route(request: str) -> str:
@@ -95,11 +125,12 @@ class TaskEngine:
     ) -> TaskPlan:
         self.lane = self.route(request)
         if self.lane == "simple":
+            requires_tools = self.action_requested(request)
             plan = TaskPlan(
                 goal=request,
-                requires_tools=False,
-                success_criteria=["Answer or perform the single requested action"],
-                steps=["Handle the request directly"],
+                requires_tools=requires_tools,
+                success_criteria=["The requested external outcome is verified"] if requires_tools else ["Answer the request"],
+                steps=["Execute the requested action", "Verify the outcome"] if requires_tools else ["Answer directly"],
                 risk="low",
                 missing_information=[],
             )
@@ -134,7 +165,7 @@ class TaskEngine:
                 text={
                     "format": {
                         "type": "json_schema",
-                        "name": "jarvis_task_plan",
+                        "name": "orion_task_plan",
                         "strict": True,
                         "schema": PLAN_SCHEMA,
                     }
@@ -146,6 +177,10 @@ class TaskEngine:
         except Exception as exc:
             diagnostics.event("planner_fallback", level="warning", error=str(exc), request=request[:500])
             plan = TaskPlan.fallback(request)
+        if self.action_requested(request):
+            plan.requires_tools = True
+            if not plan.success_criteria:
+                plan.success_criteria = ["The requested external outcome is verified"]
         self.record = TaskRecord(uuid.uuid4().hex, request, plan)
         self._save()
         self._persist_new_record()

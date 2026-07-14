@@ -15,4 +15,4 @@ if [[ -f "$MENU_TARGET" ]]; then
   rm "$MENU_TARGET"
 fi
 
-echo "Jarvis background service was removed. Project files and logs were preserved."
+echo "ORION background service was removed. Project files and logs were preserved."

@@ -84,7 +84,7 @@ def _collect_offset(
     return collected[:maximum]
 
 
-def create_discovery_playlist(name: str = "Jarvis Discoveries") -> dict:
+def create_discovery_playlist(name: str = "ORION Discoveries") -> dict:
     """Build recommendations locally so Spotify metadata never reaches the LLM."""
     spotify = _client()
     profile = _api(spotify, "GET", "me")
@@ -168,7 +168,7 @@ def create_discovery_playlist(name: str = "Jarvis Discoveries") -> dict:
     if not candidates:
         return _failure("No unfamiliar tracks were found from your Spotify history.", "no_recommendations")
 
-    playlist_name = name.strip() or "Jarvis Discoveries"
+    playlist_name = name.strip() or "ORION Discoveries"
     created = _api(
         spotify,
         "POST",
@@ -176,7 +176,7 @@ def create_discovery_playlist(name: str = "Jarvis Discoveries") -> dict:
         json={
             "name": playlist_name,
             "public": False,
-            "description": "Fresh tracks selected locally from your Spotify listening patterns by Jarvis.",
+            "description": "Fresh tracks selected locally from your Spotify listening patterns by ORION.",
         },
     )
     _api(

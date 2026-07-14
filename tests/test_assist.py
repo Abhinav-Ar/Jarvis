@@ -195,6 +195,32 @@ class AssistantTests(unittest.TestCase):
         self.assertEqual(answer, "Safari is open and foreground.")
         self.assertIn("Audit the active task", fake.calls[2]["input"])
 
+    def test_unevidenced_action_promise_is_blocked(self):
+        promise = SimpleNamespace(id="r1", output=[], output_text="I’ll open it now.")
+        repeated = SimpleNamespace(id="r2", output=[], output_text="I’ll take care of that.")
+        assistant = JarvisAssistant()
+        self.bypass_planner(assistant, requires_tools=True)
+        fake = FakeResponses([promise, repeated])
+        assistant.client = SimpleNamespace(responses=fake)
+
+        answer = assistant.ask("Open Safari")
+
+        self.assertIn("no action ran", answer)
+        self.assertIn("didn’t make any changes", answer)
+
+    def test_missing_capability_blocks_without_calling_model(self):
+        assistant = JarvisAssistant()
+        self.bypass_planner(assistant, requires_tools=True)
+        first = SimpleNamespace(id="r1", output=[], output_text="I’ll find and delete those files.")
+        second = SimpleNamespace(id="r2", output=[], output_text="I’ll take care of it.")
+        fake = FakeResponses([first, second])
+        assistant.client = SimpleNamespace(responses=fake)
+
+        answer = assistant.ask("Delete every file on the Mac")
+
+        self.assertIn("no action ran", answer)
+        self.assertEqual(len(fake.calls), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

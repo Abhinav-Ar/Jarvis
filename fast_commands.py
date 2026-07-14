@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from urllib.parse import urlparse
 
 import mac_tools
@@ -80,6 +81,59 @@ def execute(text: str) -> str | None:
     for prefix in ("hey ", "okay ", "ok ", "please "):
         if command.startswith(prefix):
             command = command[len(prefix):]
+
+    if command in {
+        "status", "orion status", "agent status", "what are you working on",
+        "what are you doing", "operating status",
+    }:
+        from orion_kernel import kernel
+        status = kernel().status()
+        active = status.get("active_goal", {}).get("goal")
+        goal = f" I’m currently tracking: {active['objective']}." if active else " I don’t have an active goal."
+        return (
+            f"ORION is online with {status['adapters']} adapters, {status['memories']} layered memories, "
+            f"and {status['event_rules']} active monitors.{goal}"
+        )
+
+    if command in {"list workflows", "show workflows", "what workflows do you know", "what can you automate"}:
+        from orion_kernel import kernel
+        items = kernel().workflows().get("workflows", [])
+        if not items:
+            return "I don’t have any taught workflows yet."
+        names = ", ".join(item["name"] for item in items[:8])
+        return f"I know {len(items)} workflow{'s' if len(items) != 1 else ''}: {names}."
+
+    if command in {"capability status", "capabilities", "worker families", "what worker families are available"}:
+        import capability_families
+        state = capability_families.status()
+        available = [item["name"] for item in state["families"] if item["available"]]
+        blocked = [item["name"] for item in state["families"] if not item["available"]]
+        return f"Available families: {', '.join(available)}. Awaiting setup: {', '.join(blocked)}."
+
+    if command in {"generation status", "codex status", "what is codex working on", "is codex finished"}:
+        import generation
+        result = generation.job_status()
+        job = result.get("job")
+        if not job:
+            return result.get("message", "No generation job has been started.")
+        if job["status"] == "running":
+            return f"Codex job {job['id']} is still working in {Path(job['workspace']).name}."
+        if job["status"] == "completed":
+            summary = str(job.get("result", "")).strip()
+            return f"Codex job {job['id']} finished. {summary[:300]}".strip()
+        return f"Codex job {job['id']} is {job['status']}."
+
+    taught = re.fullmatch(
+        r"teach (?:orion )?(?:a )?workflow(?: named| called)? (.+?): when i say (.+?), (?:do |you should )?(.+)",
+        raw,
+    )
+    if taught:
+        from orion_kernel import kernel
+        name, trigger, procedure = (part.strip() for part in taught.groups())
+        steps = [part.strip(" ,") for part in re.split(r"\s*(?:,?\s+then\s+|;)\s*", procedure) if part.strip(" ,")]
+        result = kernel().teach_workflow(name, trigger, steps)
+        if result.get("ok"):
+            return f"I learned {name}. Say “{trigger}” and I’ll follow its {len(steps)} saved steps."
 
     project_match = re.fullmatch(r"(?:start|begin) (?:a )?project(?: session)? (?:for )?(.+)", command)
     resume_match = re.fullmatch(r"resume (?:the )?(?:project )?(?:session )?(?:for )?(.+)", command)

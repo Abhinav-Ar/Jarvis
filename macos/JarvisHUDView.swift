@@ -134,7 +134,7 @@ final class JarvisHUDView: NSView {
             let bubble = NSRect(x: viewport.minX + (isUser ? 18 : 0), y: y, width: viewport.width - 18, height: height)
             if bubble.maxY >= viewport.minY && bubble.minY <= viewport.maxY {
                 rounded(bubble, radius: 10, fill: color.withAlphaComponent(0.14), stroke: color.withAlphaComponent(0.68))
-                text(isUser ? "YOU" : "JARVIS", at: NSPoint(x: bubble.minX + 11, y: bubble.maxY - 21), size: 8, color: color, weight: .bold)
+                text(isUser ? "YOU" : "ORION", at: NSPoint(x: bubble.minX + 11, y: bubble.maxY - 21), size: 8, color: color, weight: .bold)
                 block(value, in: NSRect(x: bubble.minX + 11, y: bubble.minY + 9, width: bubble.width - 22, height: bubble.height - 34), size: 11, color: .white)
             }
             y += height + 8
@@ -248,7 +248,7 @@ final class JarvisHUDView: NSView {
         let rects = layoutRects()
         let rail = rects.rail
         rounded(rail, radius: 11, fill: NSColor.black.withAlphaComponent(backgroundLuminance > 0.58 ? 0.88 : 0.62), stroke: a.withAlphaComponent(0.88), width: 1.5)
-        text("JARVIS // \(state.uppercased())", at: NSPoint(x: rail.minX + 14, y: rail.maxY - 23), size: 11, color: a, weight: .bold)
+        text("ORION // \(state.uppercased())", at: NSPoint(x: rail.minX + 14, y: rail.maxY - 23), size: 11, color: a, weight: .bold)
         text(label.uppercased(), at: NSPoint(x: rail.minX + 14, y: rail.minY + 8), size: 9, color: .white, weight: .bold)
         let pulseX = rail.maxX - 24 - CGFloat(Int(phase * 35) % max(1, Int(rail.width - 48)))
         let pulse = NSBezierPath(ovalIn: NSRect(x: pulseX, y: rail.midY - 3, width: 6, height: 6))

@@ -1,4 +1,4 @@
-"""Rotated, structured, privacy-aware diagnostic events for Jarvis."""
+"""Rotated, structured, privacy-aware diagnostic events for ORION."""
 
 from __future__ import annotations
 
@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import Any
 
 
-RUNTIME = Path(os.getenv("JARVIS_RUNTIME_DIR", Path.home() / "Library/Application Support/Jarvis/.runtime"))
+RUNTIME = Path(os.getenv("ORION_RUNTIME_DIR") or os.getenv("JARVIS_RUNTIME_DIR") or Path.home() / "Library/Application Support/Jarvis/.runtime")
 EVENT_FILE = RUNTIME / "events.jsonl"
-MAX_BYTES = int(os.getenv("JARVIS_DIAGNOSTIC_MAX_BYTES", "5000000"))
-BACKUPS = int(os.getenv("JARVIS_DIAGNOSTIC_BACKUPS", "5"))
+MAX_BYTES = int(os.getenv("ORION_DIAGNOSTIC_MAX_BYTES", os.getenv("JARVIS_DIAGNOSTIC_MAX_BYTES", "5000000")))
+BACKUPS = int(os.getenv("ORION_DIAGNOSTIC_BACKUPS", os.getenv("JARVIS_DIAGNOSTIC_BACKUPS", "5")))
 _lock = threading.Lock()
 
 

@@ -1,4 +1,4 @@
-"""Safe, structured tools available to Jarvis."""
+"""Safe, structured tools available to ORION."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import desktop
 import git_tools
 import project_workflow
 import recovery
+import app_installer
 from agent_platform import platform
 
 
@@ -126,6 +127,28 @@ TOOL_DEFINITIONS = [
             },
             "required": ["url", "browser"],
             "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "install_application",
+        "description": "Install a trusted macOS application through Homebrew, track it as a background job, and verify the app bundle. Use for explicit install or download-and-install requests. The explicit request itself counts as confirmation; never use browser navigation as a substitute.",
+        "parameters": {
+            "type": "object",
+            "properties": {"application": {"type": "string"}, "confirmed": {"type": "boolean"}},
+            "required": ["application", "confirmed"], "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function",
+        "name": "installation_status",
+        "description": "Check an installation job or verify whether a trusted application is installed.",
+        "parameters": {
+            "type": "object",
+            "properties": {"application": {"type": "string"}, "job_id": {"type": "string"}},
+            "required": ["application", "job_id"], "additionalProperties": False,
         },
         "strict": True,
     },
@@ -302,7 +325,7 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "name": "desktop_inspect",
-        "description": "Capture and visually inspect the Mac for an explicit request. When interacting with a named app, application MUST be its exact name; Jarvis brings it forward, captures only that app's display, and locks clicks to that display. Use an empty application only for read-only inspection across all displays.",
+        "description": "Capture and visually inspect the Mac for an explicit request. When interacting with a named app, application MUST be its exact name; ORION brings it forward, captures only that app's display, and locks clicks to that display. Use an empty application only for read-only inspection across all displays.",
         "parameters": {
             "type": "object",
             "properties": {"question": {"type": "string"}, "application": {"type": "string"}},
@@ -399,7 +422,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "type": "function", "name": "desktop_window_arrange",
-        "description": "Normalize fullscreen state, then create a verified, reversible workspace for one or two named applications behind the click-through Jarvis HUD. For two apps, prefer the largest connected display and balanced usable space; if app minimum sizes prevent a balanced horizontal split, use an even vertical stage rather than a cramped lopsided layout.",
+        "description": "Normalize fullscreen state, then create a verified, reversible workspace for one or two named applications behind the click-through ORION HUD. For two apps, prefer the largest connected display and balanced usable space; if app minimum sizes prevent a balanced horizontal split, use an even vertical stage rather than a cramped lopsided layout.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -412,7 +435,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "type": "function", "name": "desktop_window_restore",
-        "description": "Restore application windows previously staged by Jarvis to their original frames.",
+        "description": "Restore application windows previously staged by ORION to their original frames.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -445,37 +468,37 @@ TOOL_DEFINITIONS = [
     },
     {
         "type": "function", "name": "agent_status",
-        "description": "Report the local Jarvis platform status, including memory, indexed documents, workflows, jobs, capabilities, and cloud-call policy.",
+        "description": "Report ORION's complete local platform status, including goals, world state, layered memory, adapters, workflows, jobs, capabilities, replay, and cloud policy.",
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
         "strict": True,
     },
     {
         "type": "function", "name": "task_history_search",
-        "description": "Search Jarvis's durable local task and failure history. Use when the user asks what happened, what failed, or what problem Jarvis encountered previously.",
+        "description": "Search ORION's durable local task and failure history. Use when the user asks what happened, what failed, or what problem ORION encountered previously.",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["query", "limit"], "additionalProperties": False},
         "strict": True,
     },
     {
         "type": "function", "name": "memory_store",
-        "description": "Store a durable personal preference or fact only when the user explicitly asks Jarvis to remember it.",
+        "description": "Store a durable personal preference or fact only when the user explicitly asks ORION to remember it.",
         "parameters": {"type": "object", "properties": {"key": {"type": "string"}, "value": {"type": "string"}}, "required": ["key", "value"], "additionalProperties": False},
         "strict": True,
     },
     {
         "type": "function", "name": "memory_search",
-        "description": "Search user-authorized durable Jarvis memory for relevant preferences or facts.",
+        "description": "Search user-authorized durable ORION memory for relevant preferences or facts.",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"], "additionalProperties": False},
         "strict": True,
     },
     {
         "type": "function", "name": "memory_forget",
-        "description": "Delete one named durable memory only when the user explicitly asks Jarvis to forget it.",
+        "description": "Delete one named durable memory only when the user explicitly asks ORION to forget it.",
         "parameters": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"], "additionalProperties": False},
         "strict": True,
     },
     {
         "type": "function", "name": "local_knowledge_search",
-        "description": "Search only files the user explicitly authorized Jarvis to index locally.",
+        "description": "Search only files the user explicitly authorized ORION to index locally.",
         "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"], "additionalProperties": False},
         "strict": True,
     },
@@ -503,6 +526,84 @@ TOOL_DEFINITIONS = [
         "parameters": {"type": "object", "properties": {"notes": {"type": "string"}}, "required": ["notes"], "additionalProperties": False},
         "strict": True,
     },
+    {
+        "type": "function", "name": "orion_goal_status",
+        "description": "Report ORION's current persistent objective and its known steps.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "orion_world_state",
+        "description": "Read ORION's fresh local world model, including system state and observed context.",
+        "parameters": {"type": "object", "properties": {"prefix": {"type": "string"}}, "required": ["prefix"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "orion_workflows",
+        "description": "List workflows ORION knows, including user-taught procedures.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "orion_teach_workflow",
+        "description": "Teach ORION a reusable procedure only when the user explicitly asks. Store its name, spoken trigger, and ordered steps.",
+        "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "trigger": {"type": "string"}, "steps": {"type": "array", "items": {"type": "string"}}}, "required": ["name", "trigger", "steps"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "codex_generate",
+        "description": "Start an asynchronous Codex worker to generate or modify code in a named Git repository. Use only when the user explicitly asks ORION to build, implement, generate, refactor, or fix code. This may edit files but never commits or pushes them.",
+        "parameters": {"type": "object", "properties": {"repository": {"type": "string"}, "instruction": {"type": "string"}, "confirmed": {"type": "boolean"}}, "required": ["repository", "instruction", "confirmed"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "generation_status",
+        "description": "Report the latest or named background artifact-generation job and its result.",
+        "parameters": {"type": "object", "properties": {"job_id": {"type": "string"}}, "required": ["job_id"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "generation_cancel",
+        "description": "Cancel a running generation job only when the user explicitly requests cancellation.",
+        "parameters": {"type": "object", "properties": {"job_id": {"type": "string"}, "confirmed": {"type": "boolean"}}, "required": ["job_id", "confirmed"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "capability_families_status",
+        "description": "Report ORION's broad capability families, available adapters, and exact missing prerequisites.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "objective_compile",
+        "description": "Compile one user objective into a temporary cross-family worker team. Use to determine capabilities and prerequisites without asking the user to name workers.",
+        "parameters": {"type": "object", "properties": {"objective": {"type": "string"}}, "required": ["objective"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "google_drive_search",
+        "description": "Search the user's authorized Google Drive by filename.",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer"}}, "required": ["query", "limit"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "google_create_spreadsheet",
+        "description": "Create and verify a polished Google spreadsheet in Drive. For finance requests choose the budget template, which builds Dashboard, Transactions, Budget, and Categories sheets with formulas, validation, formatting, and a chart. One explicit user request confirms creation.",
+        "parameters": {"type": "object", "properties": {"title": {"type": "string"}, "template": {"type": "string", "enum": ["blank", "budget", "expense_tracker"]}, "currency": {"type": "string"}, "confirmed": {"type": "boolean"}}, "required": ["title", "template", "currency", "confirmed"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "google_create_document",
+        "description": "Create a Google Doc in Drive with generated content when the user explicitly requests the document.",
+        "parameters": {"type": "object", "properties": {"title": {"type": "string"}, "content": {"type": "string"}, "confirmed": {"type": "boolean"}}, "required": ["title", "content", "confirmed"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "google_create_presentation",
+        "description": "Create a Google Slides presentation in Drive when the user explicitly requests it.",
+        "parameters": {"type": "object", "properties": {"title": {"type": "string"}, "confirmed": {"type": "boolean"}}, "required": ["title", "confirmed"], "additionalProperties": False},
+        "strict": True,
+    },
 ]
 
 
@@ -517,9 +618,39 @@ TOOL_GROUPS = {
     "home": {"home_assistant_control"},
     "desktop": {"open_application", "desktop_inspect", "desktop_action", "desktop_accessibility_inspect", "desktop_local_ocr", "desktop_accessibility_set", "desktop_accessibility_press", "desktop_window_arrange", "desktop_window_restore"},
     "git": {"open_application", "git_repositories", "git_status", "git_commit", "git_commit_and_push", "git_push", "desktop_accessibility_inspect", "desktop_local_ocr", "desktop_accessibility_set", "desktop_accessibility_press", "desktop_window_arrange", "desktop_window_restore"},
-    "agent": {"agent_status", "task_history_search", "memory_store", "memory_search", "memory_forget", "local_knowledge_search"},
+    "agent": {"agent_status", "task_history_search", "memory_store", "memory_search", "memory_forget", "local_knowledge_search", "orion_goal_status", "orion_world_state", "orion_workflows", "orion_teach_workflow"},
     "project": {"project_session_start", "project_session_resume", "project_session_status", "project_session_close", "git_status"},
+    "generation": {"codex_generate", "generation_status", "generation_cancel", "git_repositories", "git_status"},
+    "capabilities": {"capability_families_status", "objective_compile"},
+    "google_workspace": {"objective_compile", "google_drive_search", "google_create_spreadsheet", "google_create_document", "google_create_presentation", "browser_navigate"},
+    "software": {"install_application", "installation_status"},
 }
+
+MUTATING_TOOLS = {
+    "open_search", "open_application", "quit_application", "browser_navigate",
+    "install_application", "set_system_volume", "show_notification",
+    "spotify_play_playlist", "spotify_create_discovery_playlist",
+    "create_reminder", "create_note", "create_calendar_event", "todoist_create_task",
+    "home_assistant_control", "create_email_draft", "apple_shortcuts",
+    "desktop_action", "desktop_accessibility_set", "desktop_accessibility_press",
+    "desktop_window_arrange", "desktop_window_restore",
+    "git_commit_and_push", "git_commit", "git_push",
+    "memory_store", "memory_forget", "orion_teach_workflow",
+    "codex_generate", "generation_cancel",
+    "google_create_spreadsheet", "google_create_document", "google_create_presentation",
+    "project_session_start", "project_session_resume", "project_session_close",
+}
+
+
+def is_action_evidence(name: str, arguments: dict, result: dict) -> bool:
+    """Only a successful state-changing capability can prove an action occurred."""
+    if not result.get("ok"):
+        return False
+    if name == "clipboard":
+        return arguments.get("action") == "write"
+    if name == "spotify_control":
+        return arguments.get("action") in {"play", "pause", "next", "previous"}
+    return name in MUTATING_TOOLS
 
 
 def select_definitions(request: str) -> list[dict]:
@@ -534,9 +665,13 @@ def select_definitions(request: str) -> list[dict]:
         (("reminder", "note", "calendar", "todoist", "email", "contact", "file", "shortcut"), "productivity"),
         (("light", "thermostat", "home assistant", "switch"), "home"),
         (("open ", "launch ", "close ", "quit ", "exit ", "volume", "clipboard", "battery", "system status", "notification"), "mac"),
-        (("remember", "forget", "memory", "what do you know", "jarvis status", "agent status", "indexed", "knowledge"), "agent"),
+        (("remember", "forget", "memory", "what do you know", "orion status", "jarvis status", "agent status", "indexed", "knowledge", "workflow", "working on", "world state"), "agent"),
         (("what happened", "what failed", "last task", "previous task", "problem did you", "your logs", "task history"), "agent"),
         (("project session", "start project", "resume project", "end project", "close project", "project status"), "project"),
+        (("codex", "generate code", "write code", "implement", "refactor", "build a feature", "generation job"), "generation"),
+        (("what can you do", "capability", "worker families", "available workers", "adapter"), "capabilities"),
+        (("google drive", "google sheet", "spreadsheet", "google doc", "google slides", "budget", "finances", "expense tracker"), "google_workspace"),
+        (("install ", "download ", "is installed", "installation", "installed yet"), "software"),
     )
     for markers, group in routes:
         if any(marker in text for marker in markers):
@@ -553,7 +688,7 @@ def select_definitions(request: str) -> list[dict]:
 
 
 def get_weather(location: str) -> dict:
-    headers = {"User-Agent": "Jarvis personal voice assistant"}
+    headers = {"User-Agent": "ORION personal operating assistant"}
     geo = requests.get(
         "https://geocoding-api.open-meteo.com/v1/search",
         params={"name": location, "count": 1, "language": "en", "format": "json"},
@@ -565,7 +700,7 @@ def get_weather(location: str) -> dict:
     if not results:
         return {"ok": False, "error": f"Location not found: {location}"}
     place = results[0]
-    units = os.getenv("JARVIS_UNITS", "fahrenheit")
+    units = os.getenv("ORION_UNITS", os.getenv("JARVIS_UNITS", "fahrenheit"))
     forecast = requests.get(
         "https://api.open-meteo.com/v1/forecast",
         params={
@@ -611,7 +746,78 @@ def spotify_play_playlist(name: str = "") -> dict:
 def spotify_create_discovery_playlist(name: str = "") -> dict:
     import spot
 
-    return spot.create_discovery_playlist(name or "Jarvis Discoveries")
+    return spot.create_discovery_playlist(name or "ORION Discoveries")
+
+
+def orion_status() -> dict:
+    from orion_kernel import kernel
+    return {**platform().summary(), "kernel": kernel().status()}
+
+
+def orion_goal_status() -> dict:
+    from orion_kernel import kernel
+    return kernel().active_goal()
+
+
+def orion_world_state(prefix: str = "") -> dict:
+    from orion_kernel import kernel
+    kernel().refresh_world()
+    return kernel().world_snapshot(prefix=prefix)
+
+
+def orion_workflows() -> dict:
+    from orion_kernel import kernel
+    return kernel().workflows()
+
+
+def orion_teach_workflow(name: str, trigger: str, steps: list[str]) -> dict:
+    from orion_kernel import kernel
+    return kernel().teach_workflow(name, trigger, steps)
+
+
+def codex_generate(repository: str, instruction: str, confirmed: bool) -> dict:
+    import generation
+    return generation.start_codex_job(repository, instruction, confirmed)
+
+
+def generation_status(job_id: str = "") -> dict:
+    import generation
+    return generation.job_status(job_id)
+
+
+def generation_cancel(job_id: str, confirmed: bool) -> dict:
+    import generation
+    return generation.cancel_job(job_id, confirmed)
+
+
+def capability_families_status() -> dict:
+    import capability_families
+    return capability_families.status()
+
+
+def objective_compile(objective: str) -> dict:
+    import capability_families
+    return capability_families.compile_objective(objective)
+
+
+def google_drive_search(query: str, limit: int = 20) -> dict:
+    import google_workspace
+    return google_workspace.search_drive(query, limit)
+
+
+def google_create_spreadsheet(title: str, template: str, currency: str, confirmed: bool) -> dict:
+    import google_workspace
+    return google_workspace.create_spreadsheet(title, template, currency, confirmed)
+
+
+def google_create_document(title: str, content: str, confirmed: bool) -> dict:
+    import google_workspace
+    return google_workspace.create_document(title, content, confirmed)
+
+
+def google_create_presentation(title: str, confirmed: bool) -> dict:
+    import google_workspace
+    return google_workspace.create_presentation(title, confirmed)
 
 
 def execute(name: str, arguments: dict) -> dict:
@@ -651,12 +857,27 @@ def execute(name: str, arguments: dict) -> dict:
         "git_commit_and_push": git_tools.commit_and_push,
         "git_commit": git_tools.commit,
         "git_push": git_tools.push,
-        "agent_status": platform().summary,
+        "agent_status": orion_status,
         "task_history_search": platform().recent_tasks,
         "memory_store": platform().remember,
         "memory_search": platform().search_memory,
         "memory_forget": platform().forget,
         "local_knowledge_search": platform().search_documents,
+        "orion_goal_status": orion_goal_status,
+        "orion_world_state": orion_world_state,
+        "orion_workflows": orion_workflows,
+        "orion_teach_workflow": orion_teach_workflow,
+        "codex_generate": codex_generate,
+        "generation_status": generation_status,
+        "generation_cancel": generation_cancel,
+        "capability_families_status": capability_families_status,
+        "objective_compile": objective_compile,
+        "google_drive_search": google_drive_search,
+        "google_create_spreadsheet": google_create_spreadsheet,
+        "google_create_document": google_create_document,
+        "google_create_presentation": google_create_presentation,
+        "install_application": app_installer.install,
+        "installation_status": app_installer.status,
         "project_session_start": project_workflow.start,
         "project_session_resume": project_workflow.resume,
         "project_session_status": project_workflow.status,
@@ -704,7 +925,7 @@ def result_summary(name: str, arguments: dict, result: dict) -> str:
     if name in {"desktop_accessibility_set", "desktop_accessibility_press"}:
         return "Done."
     if name == "desktop_window_arrange":
-        return "The requested workspace is staged beside Jarvis."
+        return "The requested workspace is staged beside ORION."
     if name == "desktop_window_restore":
         return "The application windows are back in their original positions."
     if name == "git_commit":
@@ -715,6 +936,33 @@ def result_summary(name: str, arguments: dict, result: dict) -> str:
         return f"I’ll remember {arguments.get('key')}."
     if name == "memory_forget":
         return f"I forgot {arguments.get('key')}."
+    if name == "orion_teach_workflow":
+        return f"I learned {result.get('name') or arguments.get('name')} as a reusable workflow."
+    if name == "codex_generate":
+        return f"Codex is working on {result.get('repository')}. I’ll monitor job {result.get('job_id')} in the background."
+    if name == "generation_cancel":
+        return "The generation job is cancelled."
+    if name == "google_create_spreadsheet":
+        return f"I created {result.get('title', 'the spreadsheet')} in Google Drive and verified its {len(result.get('sheets', []))} sheets."
+    if name == "google_create_document":
+        return f"I created {result.get('title', 'the document')} in Google Drive."
+    if name == "google_create_presentation":
+        return f"I created {result.get('title', 'the presentation')} in Google Drive."
+    if name == "install_application":
+        application = result.get("application") or arguments.get("application") or "The application"
+        if result.get("status") == "installed":
+            return f"{application} is already installed and verified."
+        return f"I started installing {application}. I’ll notify you when verification finishes."
+    if name == "installation_status":
+        application = result.get("application") or arguments.get("application") or "The application"
+        status = result.get("status")
+        if status in {"completed", "installed"} and result.get("verified"):
+            return f"{application} is installed and verified."
+        if status in {"running", "starting", "installing"}:
+            return f"{application} is still installing."
+        if status == "not_installed":
+            return f"{application} is not installed."
+        return f"The {application} installation failed."
     if name == "project_session_start":
         return f"Project session started for {result.get('repository')}."
     if name == "project_session_resume":
@@ -738,6 +986,8 @@ def failure_summary(result: dict) -> str:
         return "I need Accessibility permission for that application before I can continue."
     if code == "confirmation_required":
         return "I need your explicit confirmation before performing that action."
+    if code == "application_not_allowlisted":
+        return " ".join(part for part in (str(result.get("error", "")), str(result.get("recovery", ""))) if part)
     if code in {"playlist_not_found", "track_not_found", "target_not_found", "control_not_found"}:
         return str(result.get("error", "I couldn't find the requested target."))
     recovery = str(result.get("recovery", "")).strip()

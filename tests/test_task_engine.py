@@ -9,6 +9,18 @@ from task_engine import TaskEngine
 
 
 class TaskEngineTests(unittest.TestCase):
+    def test_imperative_simple_action_requires_tool_evidence(self):
+        with TemporaryDirectory() as runtime, patch.dict("os.environ", {"JARVIS_RUNTIME_DIR": runtime}):
+            engine = TaskEngine()
+            client = SimpleNamespace(responses=SimpleNamespace(create=lambda **kwargs: None))
+            plan = engine.plan(client, "model", "low", "Open Safari")
+            self.assertTrue(plan.requires_tools)
+            self.assertEqual(plan.steps[-1], "Verify the outcome")
+
+    def test_informational_how_to_request_does_not_require_action(self):
+        self.assertFalse(TaskEngine.action_requested("How do I install Blender?"))
+        self.assertTrue(TaskEngine.action_requested("Install Blender on my laptop"))
+
     def test_planner_creates_prerequisite_plan_and_persists_state(self):
         data = {
             "goal": "Commit and push changes",

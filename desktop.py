@@ -103,7 +103,7 @@ def accessibility_set(application: str, selector: str, text: str, confirmed: boo
         return {"ok": False, "error_code": "confirmation_required", "confirmation_required": True, "error": "Filling this field requires explicit authorization."}
     forbidden = ("password", "passcode", "security code", "credit card", "token", "secret")
     if any(word in selector.lower() for word in forbidden):
-        return {"ok": False, "error_code": "sensitive_field", "requires_user": True, "error": "Jarvis will not fill sensitive fields."}
+        return {"ok": False, "error_code": "sensitive_field", "requires_user": True, "error": "ORION will not fill sensitive fields."}
     encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
     return _helper_json(["set-ui", application, selector, encoded])
 
@@ -375,7 +375,7 @@ def perform_action(
         return {
             "ok": False,
             "error_code": "control_disabled",
-            "error": "Desktop control is off. The user must enable it from the Jarvis menu bar.",
+            "error": "Desktop control is off. The user must enable it from the ORION menu bar.",
         }
     if not HELPER.exists():
         return {"ok": False, "error_code": "helper_not_installed", "error": "The desktop helper is not installed."}

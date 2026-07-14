@@ -1,4 +1,4 @@
-"""Local-first persistent agent substrate for Jarvis."""
+"""Local-first persistent agent substrate for ORION."""
 
 from __future__ import annotations
 
@@ -13,9 +13,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 import diagnostics
+import shutil
 
 
-RUNTIME = Path(os.getenv("JARVIS_RUNTIME_DIR", Path.cwd() / ".runtime"))
+RUNTIME = Path(os.getenv("ORION_RUNTIME_DIR") or os.getenv("JARVIS_RUNTIME_DIR") or Path.cwd() / ".runtime")
 DATABASE = RUNTIME / "agent.db"
 STATUS = RUNTIME / "platform-status.json"
 _lock = threading.RLock()
@@ -25,6 +26,7 @@ class AgentPlatform:
     def __init__(self, database: Path | None = None) -> None:
         self.database = database or DATABASE
         self.status_path = self.database.parent / "platform-status.json"
+        self.cloud_limit_disabled_flag = self.database.parent / "cloud-limit-disabled"
         self.database.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
@@ -327,9 +329,11 @@ class AgentPlatform:
         self.write_status()
 
     def cloud_allowed(self, purpose: str = "general") -> tuple[bool, str]:
-        if os.getenv("JARVIS_CLOUD_ENABLED", "1") != "1":
+        if os.getenv("ORION_CLOUD_ENABLED", os.getenv("JARVIS_CLOUD_ENABLED", "1")) != "1":
             return False, "Cloud AI is disabled."
-        limit = int(os.getenv("JARVIS_MAX_CLOUD_CALLS_PER_DAY", "100"))
+        if self.cloud_limit_disabled_flag.exists():
+            return True, "Local cloud-call limit is disabled."
+        limit = int(os.getenv("ORION_MAX_CLOUD_CALLS_PER_DAY", os.getenv("JARVIS_MAX_CLOUD_CALLS_PER_DAY", "100")))
         since = time.time() - 86400
         with _lock, self._connect() as db:
             count = db.execute("SELECT COUNT(*) FROM cloud_usage WHERE created >= ?", (since,)).fetchone()[0]
@@ -365,8 +369,12 @@ class AgentPlatform:
             return "consequential"
         if tool in {"desktop_window_arrange", "desktop_window_restore"}:
             return "reversible"
-        if tool.startswith(("create_", "todoist_", "home_assistant_", "quit_", "spotify_create_")):
+        if tool.startswith(("create_", "todoist_", "home_assistant_", "quit_", "spotify_create_", "google_create_")):
             return "reversible"
+        if tool == "orion_teach_workflow":
+            return "reversible"
+        if tool in {"codex_generate", "generation_cancel"}:
+            return "consequential"
         return "read_only"
 
     def summary(self) -> dict:
@@ -378,6 +386,8 @@ class AgentPlatform:
                 "queued_jobs": db.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0],
                 "task_history": db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0],
                 "capabilities": db.execute("SELECT COUNT(*) FROM capabilities WHERE available=1").fetchone()[0],
+                "capability_families_available": db.execute("SELECT COUNT(*) FROM capabilities WHERE name LIKE 'family:%' AND available=1").fetchone()[0],
+                "capability_families_total": db.execute("SELECT COUNT(*) FROM capabilities WHERE name LIKE 'family:%'").fetchone()[0],
                 "cloud_calls_24h": db.execute(
                     "SELECT COUNT(*) FROM cloud_usage WHERE created >= ?", (time.time() - 86400,)
                 ).fetchone()[0],
@@ -385,7 +395,19 @@ class AgentPlatform:
                     "SELECT repository FROM project_sessions WHERE status='active' ORDER BY updated DESC LIMIT 1"
                 ).fetchone(),
             }
+            tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            if "world_facts" in tables:
+                counts.update({
+                    "world_facts": db.execute("SELECT COUNT(*) FROM world_facts").fetchone()[0],
+                    "active_goals": db.execute("SELECT COUNT(*) FROM goals WHERE status IN ('active','awaiting_input')").fetchone()[0],
+                    "layered_memories": db.execute("SELECT COUNT(*) FROM layered_memory").fetchone()[0],
+                    "adapters": db.execute("SELECT COUNT(*) FROM adapters WHERE available=1").fetchone()[0],
+                    "monitors": db.execute("SELECT COUNT(*) FROM event_rules WHERE enabled=1").fetchone()[0],
+                    "replay_turns": db.execute("SELECT COUNT(*) FROM replay_turns").fetchone()[0],
+                })
         counts["active_project"] = counts["active_project"][0] if counts["active_project"] else ""
+        counts["cloud_base_limit"] = int(os.getenv("ORION_MAX_CLOUD_CALLS_PER_DAY", os.getenv("JARVIS_MAX_CLOUD_CALLS_PER_DAY", "100")))
+        counts["cloud_limit_enabled"] = not self.cloud_limit_disabled_flag.exists()
         allowed, reason = self.cloud_allowed()
         return {"ok": True, **counts, "cloud_allowed": allowed, "cloud_policy": reason}
 
@@ -415,11 +437,22 @@ def initialize_platform() -> AgentPlatform:
         "mac_control": (True, "Native macOS tools"),
         "persistent_memory": (True, str(agent.database)),
         "workflow_engine": (True, "Local SQLite queue"),
-        "local_transcription": (
-            os.getenv("JARVIS_LOCAL_TRANSCRIPTION", "1") == "1" and importlib.util.find_spec("mlx_whisper") is not None,
-            os.getenv("JARVIS_LOCAL_TRANSCRIBE_MODEL", "mlx-community/whisper-tiny"),
+        "world_model": (True, "Observed state with source, confidence, and freshness"),
+        "goal_supervisor": (True, "Persistent goals, prerequisites, and outcomes"),
+        "layered_memory": (True, "Working, episodic, semantic, and procedural memory"),
+        "event_monitor": (True, "Local battery, disk, and scheduled-work monitoring"),
+        "replay_diagnostics": (True, "Sanitized request routing and outcome replay"),
+        "adapter_registry": (True, "Native, semantic, API, and cloud capability registry"),
+        "intelligence_router": (True, "Local-first routing with bounded cloud escalation"),
+        "codex_worker": (
+            bool(shutil.which("codex") or Path("/Applications/ChatGPT.app/Contents/Resources/codex").exists()),
+            "Asynchronous workspace-write code generation",
         ),
-        "local_speech": (os.getenv("JARVIS_LOCAL_SPEECH", "1") == "1", "Built-in macOS voice"),
+        "local_transcription": (
+            os.getenv("ORION_LOCAL_TRANSCRIPTION", os.getenv("JARVIS_LOCAL_TRANSCRIPTION", "1")) == "1" and importlib.util.find_spec("mlx_whisper") is not None,
+            os.getenv("ORION_LOCAL_TRANSCRIBE_MODEL", os.getenv("JARVIS_LOCAL_TRANSCRIBE_MODEL", "mlx-community/whisper-tiny")),
+        ),
+        "local_speech": (os.getenv("ORION_LOCAL_SPEECH", os.getenv("JARVIS_LOCAL_SPEECH", "1")) == "1", "Built-in macOS voice"),
         "openai": (bool(os.getenv("OPENAI_API_KEY")), "Cloud escalation"),
         "spotify": (bool(os.getenv("SPOTIPY_CLIENT_ID") and os.getenv("SPOTIPY_CLIENT_SECRET")), "Spotify API"),
         "todoist": (bool(os.getenv("TODOIST_API_TOKEN")), "Todoist API"),
@@ -427,8 +460,16 @@ def initialize_platform() -> AgentPlatform:
     }
     for name, (available, detail) in local.items():
         agent.register_capability(name, "integration" if name not in {"persistent_memory", "workflow_engine"} else "agent", available, detail)
-    roots = [Path(value).expanduser() for value in os.getenv("JARVIS_INDEX_ROOTS", "").split(os.pathsep) if value.strip()]
+    try:
+        import capability_families
+        for key, family in capability_families.families().items():
+            detail = family.description if family.available else family.prerequisite
+            agent.register_capability(f"family:{key}", "capability_family", family.available, detail)
+    except Exception as exc:
+        diagnostics.event("capability_family_registration_failed", level="warning", error=str(exc))
+    roots_value = os.getenv("ORION_INDEX_ROOTS", os.getenv("JARVIS_INDEX_ROOTS", ""))
+    roots = [Path(value).expanduser() for value in roots_value.split(os.pathsep) if value.strip()]
     if roots:
-        agent.index_paths(roots, maximum_files=int(os.getenv("JARVIS_INDEX_MAX_FILES", "500")))
+        agent.index_paths(roots, maximum_files=int(os.getenv("ORION_INDEX_MAX_FILES", os.getenv("JARVIS_INDEX_MAX_FILES", "500"))))
     agent.write_status()
     return agent

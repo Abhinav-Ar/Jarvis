@@ -18,7 +18,7 @@ mkdir -p "$APP_DIR/.runtime" "$HOME/Library/LaunchAgents" "$HOME/Applications"
 
 # LaunchAgents cannot reliably read projects under macOS-protected Documents.
 # Deploy a minimal private runtime under Application Support instead.
-for file in jarvis.py assist.py audio.py activity.py diagnostics.py fast_commands.py tools.py spot.py mac_tools.py integrations.py desktop.py git_tools.py task_engine.py agent_platform.py project_workflow.py execution_engine.py recovery.py requirements.txt start.sh; do
+for file in orion.py orion_kernel.py orion_replay.py generation.py capability_families.py google_workspace.py app_installer.py jarvis.py assist.py audio.py activity.py diagnostics.py fast_commands.py tools.py spot.py mac_tools.py integrations.py desktop.py git_tools.py task_engine.py agent_platform.py project_workflow.py execution_engine.py recovery.py requirements.txt start.sh; do
   /usr/bin/ditto "$PROJECT_DIR/$file" "$APP_DIR/$file"
 done
 /usr/bin/ditto "$PROJECT_DIR/.env" "$APP_DIR/.env"
@@ -74,8 +74,8 @@ load_agent() {
 load_agent "$LABEL" "$TARGET"
 load_agent "$MENU_LABEL" "$MENU_TARGET"
 
-echo "Jarvis is installed as a login background service."
+echo "ORION is installed as a login background service."
 echo "Runtime: $APP_DIR"
 echo "Menu app: $MENU_APP"
-echo "A colored '● Jarvis' controller is available in the macOS menu bar."
-echo "Use ./jarvisctl status, ./jarvisctl logs, or ./jarvisctl stop."
+echo "A colored '● ORION' controller is available in the macOS menu bar."
+echo "Use ./orionctl status, ./orionctl logs, or ./orionctl stop."

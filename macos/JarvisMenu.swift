@@ -19,11 +19,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private lazy var uiPlanFile = appDirectory.appendingPathComponent(".runtime/ui-plan.json")
     private lazy var contrastFile = appDirectory.appendingPathComponent(".runtime/contrast-state.json")
     private lazy var platformFile = appDirectory.appendingPathComponent(".runtime/platform-status.json")
+    private lazy var cloudLimitDisabledFlag = appDirectory.appendingPathComponent(".runtime/cloud-limit-disabled")
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
     private var detailMenuItem: NSMenuItem!
     private var desktopControlItem: NSMenuItem!
     private var platformMenuItem: NSMenuItem!
+    private var cloudMenuItem: NSMenuItem!
     private var timer: Timer?
     private var interactionTimer: Timer?
     private var hud: NSWindow?
@@ -41,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         try? FileManager.default.createDirectory(at: controlFlag.deletingLastPathComponent(), withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: controlFlag.path, contents: Data())
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.toolTip = "Jarvis voice assistant"
+        statusItem.button?.toolTip = "ORION operating assistant"
 
         let menu = NSMenu()
         statusMenuItem = NSMenuItem(title: "Checking status…", action: nil, keyEquivalent: "")
@@ -53,12 +55,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         platformMenuItem = NSMenuItem(title: "Agent platform: starting…", action: nil, keyEquivalent: "")
         platformMenuItem.isEnabled = false
         menu.addItem(platformMenuItem)
+        cloudMenuItem = NSMenuItem(title: "Cloud Limit: checking…", action: #selector(toggleCloudLimit), keyEquivalent: "b")
+        menu.addItem(cloudMenuItem)
         desktopControlItem = NSMenuItem(title: "Enable Desktop Control", action: #selector(toggleDesktopControl), keyEquivalent: "d")
         menu.addItem(desktopControlItem)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Start Jarvis", action: #selector(startJarvis), keyEquivalent: "s"))
-        menu.addItem(NSMenuItem(title: "Stop Jarvis", action: #selector(stopJarvis), keyEquivalent: "x"))
-        menu.addItem(NSMenuItem(title: "Restart Jarvis", action: #selector(restartJarvis), keyEquivalent: "r"))
+        menu.addItem(NSMenuItem(title: "Start ORION", action: #selector(startJarvis), keyEquivalent: "s"))
+        menu.addItem(NSMenuItem(title: "Stop ORION", action: #selector(stopJarvis), keyEquivalent: "x"))
+        menu.addItem(NSMenuItem(title: "Restart ORION", action: #selector(restartJarvis), keyEquivalent: "r"))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Open Recent Log", action: #selector(openLog), keyEquivalent: "l"))
         menu.addItem(NSMenuItem(title: "Open Diagnostic Events", action: #selector(openDiagnostics), keyEquivalent: "e"))
@@ -224,7 +228,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
            Date().timeIntervalSince(modified) < 10 {
             state = "working"
             label = "Working…"
-            detail = "Previewing the Jarvis command interface"
+            detail = "Previewing the ORION command interface"
         }
         let colors: [String: NSColor] = [
             "listening": .systemCyan, "session": .systemYellow, "transcribing": .systemYellow,
@@ -243,29 +247,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         detailMenuItem.title = detail.isEmpty ? "Desktop control: \(desktopEnabled ? "On" : "Off")" : detail
         if let data = try? Data(contentsOf: platformFile),
            let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let memories = value["memories"] as? Int ?? 0
-            let documents = value["documents"] as? Int ?? 0
             let calls = value["cloud_calls_24h"] as? Int ?? 0
+            let baseLimit = value["cloud_base_limit"] as? Int ?? 100
+            let limitEnabled = !FileManager.default.fileExists(atPath: cloudLimitDisabledFlag.path)
             let tasks = value["task_history"] as? Int ?? 0
+            let goals = value["active_goals"] as? Int ?? 0
+            let facts = value["world_facts"] as? Int ?? 0
+            let adapters = value["adapters"] as? Int ?? 0
+            let availableFamilies = value["capability_families_available"] as? Int ?? 0
+            let totalFamilies = value["capability_families_total"] as? Int ?? 0
             let project = value["active_project"] as? String ?? ""
             let projectLabel = project.isEmpty ? "no active project" : "project: \(project)"
-            platformMenuItem.title = "Local agent: \(projectLabel) • \(tasks) tasks • \(memories) memories • \(documents) files • \(calls) cloud calls"
+            platformMenuItem.title = "ORION: \(availableFamilies)/\(totalFamilies) families • \(projectLabel) • \(goals) goals • \(facts) observations • \(adapters) adapters • \(tasks) tasks • \(calls) cloud calls"
+            cloudMenuItem.title = limitEnabled
+                ? "Cloud Limit: On • \(calls) / \(baseLimit)"
+                : "Cloud Limit: Off • \(calls) calls"
+            cloudMenuItem.state = limitEnabled ? .on : .off
         }
         statusItem.button?.attributedTitle = NSAttributedString(
-            string: state == "listening" || state == "stopped" ? "● Jarvis" : "● \(label)",
+            string: state == "listening" || state == "stopped" ? "● ORION" : "● \(label)",
             attributes: [
                 .foregroundColor: color,
                 .font: NSFont.boldSystemFont(ofSize: NSFont.systemFontSize),
             ]
         )
-        statusItem.button?.toolTip = detail.isEmpty ? "Jarvis is \(label.lowercased())" : detail
+        statusItem.button?.toolTip = detail.isEmpty ? "ORION is \(label.lowercased())" : detail
         desktopControlItem.title = desktopEnabled
             ? "Disable Desktop Control (Emergency Stop)"
             : "Enable Desktop Control"
         updateHUD(state: state, label: label, detail: detail)
         if state == "listening" && ["working", "verifying", "speaking"].contains(previousState) {
             let content = UNMutableNotificationContent()
-            content.title = "Jarvis finished"
+            content.title = "ORION finished"
             content.body = detail.isEmpty ? "The task is complete." : detail
             content.sound = .default
             UNUserNotificationCenter.current().add(
@@ -409,6 +422,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                 withIntermediateDirectories: true
             )
             FileManager.default.createFile(atPath: controlFlag.path, contents: Data())
+        }
+        refreshStatus()
+    }
+
+    @objc private func toggleCloudLimit() {
+        if FileManager.default.fileExists(atPath: cloudLimitDisabledFlag.path) {
+            try? FileManager.default.removeItem(at: cloudLimitDisabledFlag)
+        } else {
+            try? FileManager.default.createDirectory(at: cloudLimitDisabledFlag.deletingLastPathComponent(), withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: cloudLimitDisabledFlag.path, contents: Data())
         }
         refreshStatus()
     }

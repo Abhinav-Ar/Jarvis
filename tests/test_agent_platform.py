@@ -33,6 +33,13 @@ class AgentPlatformTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("limit", reason.lower())
 
+    @patch.dict("os.environ", {"ORION_MAX_CLOUD_CALLS_PER_DAY": "0"})
+    def test_cloud_limit_can_be_toggled_off_for_testing(self):
+        self.agent.cloud_limit_disabled_flag.touch()
+        allowed, reason = self.agent.cloud_allowed()
+        self.assertTrue(allowed)
+        self.assertIn("disabled", reason.lower())
+
     def test_workflows_and_jobs_persist(self):
         self.assertTrue(self.agent.save_workflow("morning", [{"tool": "agent_status"}])["ok"])
         self.assertEqual(self.agent.queue_job("morning", {})["status"], "queued")

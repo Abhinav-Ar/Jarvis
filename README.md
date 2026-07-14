@@ -1,8 +1,112 @@
-# Jarvis for macOS
+# ORION for macOS
 
-Jarvis is a voice-driven Mac and personal assistant. It records a spoken phrase,
+ORION — **One Really Intelligent Operating Network** — is a persistent, local-first
+Mac operating assistant. It records a spoken phrase,
 transcribes it locally on Apple silicon by default, reasons through the Responses API, executes bounded
 tools when requested, and speaks the result through the Mac's audio output.
+
+Say **“Hey ORION”** once to open a session. Follow-up requests and interruptions do
+not need the wake phrase. Say **“Hey ORION, that’ll be all”** to close the current
+conversation, or **“Hey ORION, log off”** to stop the background assistant.
+
+The macOS service and permission bundle retain their original `com.jarvis.*` identifiers
+and `~/Library/Application Support/Jarvis` storage path. This is intentional migration
+compatibility: the product is ORION, while preserving those internal identifiers prevents
+macOS from discarding the Screen Recording and Accessibility grants you already approved.
+
+## Persistent operating architecture
+
+ORION now runs six durable local subsystems around the existing action engine:
+
+- **World model:** observations carry a source, confidence, timestamp, and expiry so
+  stale screen or system state is not treated as current truth.
+- **Goal supervisor:** every request becomes a persistent objective with ordered steps,
+  success criteria, risk, evidence, and a lifecycle that follow-ups can resume.
+- **Four-layer memory:** working memory for the live session, episodic task history,
+  semantic preferences and facts, and procedural user-taught workflows.
+- **Event monitor:** low battery, low disk, and scheduled-work watchers operate locally
+  in the background and use cooldowns instead of repeatedly firing.
+- **Adapter registry and intelligence router:** native and deterministic routes are
+  preferred; Accessibility and local OCR precede vision; cloud reasoning is used only
+  when the request actually needs it and remains subject to a daily cap.
+- **Sanitized replay:** request, route, goal, response, and outcome records make failures
+  reproducible without rerunning actions or storing secrets in the replay corpus.
+
+Teach a procedure with a phrase such as: “Teach ORION a workflow named Focus Mode:
+when I say start focus mode, open Notes, then mute notifications.” Ask “ORION status,”
+“What are you working on?”, or “What workflows do you know?” for zero-cloud summaries.
+
+### Generation workers
+
+ORION can supervise long-running artifact workers rather than trying to perform
+every task inside one voice response. The first worker is the Codex CLI bundled
+with ChatGPT. An explicit request such as “Use Codex to implement the settings
+screen in the Jarvis repository” starts an asynchronous workspace-write job,
+returns a job identifier immediately, and leaves ORION responsive. ORION monitors
+the process, records its final result, and sends a macOS notification when it
+finishes. Generation never commits or pushes unless those actions are requested
+separately. “What is Codex working on?” reports the latest job locally.
+
+The same worker contract is intended for future CAD, 3D, document, media, data,
+and simulation adapters: a bounded workspace, an explicit objective, progress,
+an inspectable artifact, and separate approval for consequential publication.
+
+### Verified action execution
+
+Imperative requests are evidence-gated. ORION cannot satisfy an action request
+with future-tense prose: the matching state-changing tool must run successfully,
+while searches and inspections count only as supporting observations. If no
+executable capability exists, ORION says that nothing changed and records a
+capability gap instead of pretending to continue.
+
+Explicit application-install requests use Homebrew's cask catalog through an
+argument-safe background worker. ORION validates cask metadata, starts an
+observable job, keeps its output under the private runtime folder, verifies the
+installed cask/application, and posts a macOS notification when it finishes.
+Ask “Is Blender installed yet?” to inspect the latest job without another install.
+
+The menu-bar **Cloud Limit** item is a direct toggle. When on, the configured
+rolling daily ceiling applies; when off, ORION allows cloud calls without its
+local ceiling, although provider billing and account limits still apply.
+
+### Capability families and objective composition
+
+Users describe an outcome once; they do not create or select workers. ORION
+compiles the objective against eight broad families and assembles a temporary
+team from the smallest useful combination:
+
+- Google Workspace — Drive, Sheets, Docs, and Slides
+- Microsoft 365 — OneDrive, Excel, Word, PowerPoint, and Outlook
+- Development — Codex, Git, GitHub, Xcode, and VS Code
+- Creative — image, design, audio, video, and 3D production adapters
+- Engineering and CAD — parametric models, drawings, simulation, and validation
+- Business — budgets, invoices, forecasts, reports, and dashboards
+- Research — current web and authorized local-document synthesis
+- macOS — applications, windows, files, Apple apps, Shortcuts, and system state
+
+Families are capability manifests, not fake integrations. The menu shows how
+many are currently available. Families requiring a provider account, OAuth
+grant, or installed application report that exact prerequisite. Once a family
+adapter is authorized, every objective using it becomes available without
+teaching a separate workflow.
+
+The Google Workspace family includes an end-to-end budget generator. “Create a
+Google Drive spreadsheet for my finances and set it up as a monthly budget”
+creates Dashboard, Transactions, Budget, and Categories sheets; formulas,
+currency formatting, category and transaction-type validation, frozen headers,
+automatic sizing, and a Budget-vs-Actual chart; then returns the Drive URL.
+
+Authorize it in `.env` with either a short-lived `GOOGLE_ACCESS_TOKEN` or a
+refresh-token configuration:
+
+```dotenv
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_REFRESH_TOKEN=
+```
+
+The OAuth grant needs Drive-file, Sheets, Docs, and Slides scopes. ORION never
+stores those credentials in its memory, replay, diagnostics, or model context.
 
 ## Capabilities
 

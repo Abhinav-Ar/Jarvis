@@ -1,8 +1,9 @@
-"""Jarvis voice assistant command-line application."""
+"""ORION voice assistant command-line application."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -18,6 +19,7 @@ import activity
 import fast_commands
 import diagnostics
 from agent_platform import initialize_platform
+from orion_kernel import initialize_kernel
 
 
 def arguments() -> argparse.Namespace:
@@ -38,8 +40,8 @@ def _wake_prefix(hotword: str) -> re.Pattern[str]:
     """Match activation language only at the start of an utterance.
 
     Barge-in transcription sometimes retains a leading conjunction from the
-    sentence Jarvis was speaking, so a single "and" is accepted before the
-    activation phrase. Mentions such as "the Jarvis project" are not wakeups.
+    sentence ORION was speaking, so a single "and" is accepted before the
+    activation phrase. Mentions such as "the ORION project" are not wakeups.
     """
     escaped = re.escape(hotword.strip())
     return re.compile(
@@ -57,7 +59,10 @@ def is_logoff_command(text: str) -> bool:
     for prefix in ("hey ", "okay ", "ok ", "please "):
         if normalized.startswith(prefix):
             normalized = normalized[len(prefix):]
-    return normalized in {"log off", "logoff", "log out", "logout", "go offline", "shut down jarvis"}
+    return normalized in {
+        "log off", "logoff", "log out", "logout", "go offline",
+        "shut down orion", "shut down jarvis",
+    }
 
 
 def is_satisfied_command(text: str) -> bool:
@@ -80,13 +85,13 @@ def is_authorized_session_close(text: str, hotword: str) -> bool:
 
 
 def stop_desktop_control() -> None:
-    """Remove the active-session control grant while Jarvis is stopped."""
+    """Remove the active-session control grant while ORION is stopped."""
     flag = Path.home() / "Library/Application Support/Jarvis/.runtime/desktop-control-enabled"
     flag.unlink(missing_ok=True)
 
 
 def start_desktop_control() -> None:
-    """Every new Jarvis session defaults to desktop control on."""
+    """Every new ORION session defaults to desktop control on."""
     runtime = Path.home() / "Library/Application Support/Jarvis/.runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "desktop-control-disabled").unlink(missing_ok=True)
@@ -123,23 +128,26 @@ def main() -> int:
         print("OPENAI_API_KEY is missing. Copy .env.example to .env and add your key.", file=sys.stderr)
         return 2
 
-    print("Starting Jarvis…", flush=True)
-    initialize_platform()
+    print("Starting ORION…", flush=True)
+    agent_platform = initialize_platform()
+    operating_kernel = initialize_kernel()
+    agent_platform.write_status()
+    session_id = uuid.uuid4().hex
     start_desktop_control()
     activity.reset_ui()
-    from assist import JarvisAssistant
-    assistant = JarvisAssistant()
+    from assist import OrionAssistant
+    assistant = OrionAssistant()
     recorder = None
     if not args.text:
         from audio import PhraseRecorder
         recorder = PhraseRecorder()
 
-    hotword = os.getenv("JARVIS_HOTWORD", "jarvis").lower()
+    hotword = os.getenv("ORION_HOTWORD", "orion").lower()
     session_active = False
     pending_audio_path = None
-    print("Jarvis is ready. Press Control-C to stop.")
+    print("ORION is ready. Press Control-C to stop.")
     activity.update("listening", "Listening")
-    diagnostics.event("service_started", mode="text" if args.text else "voice", hotword=os.getenv("JARVIS_HOTWORD", "jarvis"))
+    diagnostics.event("service_started", identity="ORION", session_id=session_id, mode="text" if args.text else "voice", hotword=hotword)
 
     while True:
         try:
@@ -164,7 +172,7 @@ def main() -> int:
                     transcription_seconds = time.perf_counter() - transcription_started
                     diagnostics.event(
                         "transcription_completed", duration_ms=round(transcription_seconds * 1000),
-                        transcript=text if os.getenv("JARVIS_LOG_TRANSCRIPTS", "1") == "1" else "[disabled]",
+                        transcript=text if os.getenv("ORION_LOG_TRANSCRIPTS", os.getenv("JARVIS_LOG_TRANSCRIPTS", "1")) == "1" else "[disabled]",
                     )
                 finally:
                     audio_path.unlink(missing_ok=True)
@@ -182,7 +190,7 @@ def main() -> int:
                 hotword=hotword,
             ):
                 diagnostics.event("wake_phrase_not_found", transcript=text[:300])
-                activity.update("session" if session_active else "listening", "Say Jarvis to continue" if session_active else "Listening")
+                activity.update("session" if session_active else "listening", "Say ORION to continue" if session_active else "Listening")
                 continue
 
             wake_detected = has_wake_phrase(text, hotword)
@@ -192,7 +200,7 @@ def main() -> int:
                     assistant.reset_session()
                 session_active = True
                 activity.cue("heard")
-                activity.update("transcribing", "Wake confirmed", "Jarvis heard the activation phrase")
+                activity.update("transcribing", "Wake confirmed", "ORION heard the activation phrase")
                 text = strip_wake_word(text, hotword)
                 diagnostics.event("wake_phrase_confirmed", request_id=request_id, request=text[:500])
             if not text:
@@ -205,12 +213,13 @@ def main() -> int:
                 restore_workspace()
                 activity.update("stopped", "Stopped")
                 stop_desktop_control()
-                print("Jarvis: Logging off.")
+                operating_kernel.stop_monitor()
+                print("ORION: Logging off.")
                 assistant.speak("Logging off.")
                 break
 
             if is_logoff_command(text) and not wake_detected:
-                message = "For a complete shutdown, say: Hey Jarvis, log off."
+                message = "For a complete shutdown, say: Hey ORION, log off."
                 activity.append_chat("user", text)
                 activity.append_chat("assistant", message)
                 assistant.speak(message)
@@ -229,7 +238,7 @@ def main() -> int:
                 continue
 
             if is_satisfied_command(text) and not wake_detected:
-                message = "To close this session, say: Hey Jarvis, that’ll be all."
+                message = "To close this session, say: Hey ORION, that’ll be all."
                 activity.append_chat("user", text)
                 activity.append_chat("assistant", message)
                 assistant.speak(message)
@@ -238,7 +247,12 @@ def main() -> int:
 
             activity.append_chat("user", text)
 
-            prompt = f"Local time: {datetime.now().astimezone().isoformat(timespec='minutes')}\nUser: {text}"
+            kernel_turn = operating_kernel.before_request(text, request_id, session_id)
+            kernel_context = json.dumps(kernel_turn["context"], default=str)[:5000]
+            prompt = (
+                f"Local time: {datetime.now().astimezone().isoformat(timespec='minutes')}\n"
+                f"ORION operating context (local, bounded): {kernel_context}\nUser: {text}"
+            )
             if not wake_detected:
                 activity.cue("heard")
             if is_complex_request(text):
@@ -257,9 +271,12 @@ def main() -> int:
                 fast_reply = None
             reply = fast_reply or assistant.ask(prompt, request_id=request_id)
             assistant.record_turn(text, reply, local=fast_reply is not None)
+            operating_kernel.after_response(
+                text, reply, request_id, session_id, kernel_turn["goal_id"], kernel_turn["route"]
+            )
             thinking_seconds = time.perf_counter() - thinking_started
             diagnostics.event("request_answer_ready", request_id=request_id, duration_ms=round(thinking_seconds * 1000), response_chars=len(reply))
-            print(f"Jarvis ({thinking_seconds:.1f}s thinking): {reply}")
+            print(f"ORION ({thinking_seconds:.1f}s thinking): {reply}")
             activity.append_chat("assistant", reply)
             speaking_started = time.perf_counter()
             activity.update("speaking", "Responding…")
@@ -290,16 +307,23 @@ def main() -> int:
         except Exception as exc:
             activity.update("error", "Problem", str(exc)[:120])
             activity.cue("error")
-            print(f"Jarvis error: {exc}", file=sys.stderr)
+            print(f"ORION error: {exc}", file=sys.stderr)
             diagnostics.event("request_failed", level="error", error=str(exc), traceback=traceback.format_exc())
-            fallback = "I ran into a problem before I could verify the task. I’ve stopped safely instead of pretending it finished."
+            if "cloud-call limit" in str(exc).lower():
+                fallback = (
+                    "Cloud reasoning is paused because today’s call budget has been reached. "
+                    "My local Mac controls and saved workflows still work, and cloud access will return as the rolling 24-hour window clears."
+                )
+            else:
+                fallback = "I ran into a problem before I could verify the task. I’ve stopped safely instead of pretending it finished."
             activity.append_chat("assistant", fallback)
             try:
                 assistant.speak(fallback, allow_barge_in=not args.text)
             except Exception as speech_error:
-                print(f"Jarvis speech error: {speech_error}", file=sys.stderr)
+                print(f"ORION speech error: {speech_error}", file=sys.stderr)
             if args.once:
                 return 1
+    operating_kernel.stop_monitor()
     return 0
 
 

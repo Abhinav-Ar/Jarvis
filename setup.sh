@@ -12,7 +12,7 @@ fi
 
 if [[ ! -f .env ]]; then
   cp .env.example .env
-  echo "Created .env. Add your OPENAI_API_KEY before starting Jarvis."
+  echo "Created .env. Add your OPENAI_API_KEY before starting ORION."
 fi
 
 echo "Setup complete. Start in text mode with: ./start.sh --text"

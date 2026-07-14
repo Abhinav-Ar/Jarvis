@@ -254,7 +254,7 @@ let action = args[1]
 if !["screenshot", "screenshot-app", "ocr-app", "list-windows"].contains(action) {
     let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
     guard AXIsProcessTrustedWithOptions(options) else {
-        fail("Accessibility permission is required for Jarvis Desktop Helper")
+        fail("Accessibility permission is required for ORION Desktop Helper")
     }
 }
 
@@ -582,7 +582,7 @@ case "set-ui":
     let root = applicationElement(args[2])
     guard let element = matchingElements(root, selector: args[3]).first else { fail("No accessible field matched: \(args[3])") }
     let fields = [args[3], axString(element, kAXTitleAttribute as String), axString(element, kAXDescriptionAttribute as String)]
-    guard !isSensitive(element, fields: fields) else { fail("Jarvis will not fill a sensitive field") }
+    guard !isSensitive(element, fields: fields) else { fail("ORION will not fill a sensitive field") }
     guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef) == .success else {
         fail("Unable to set accessible field: \(args[3])")
     }

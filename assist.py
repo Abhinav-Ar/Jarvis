@@ -80,6 +80,12 @@ For visible work spanning one or two applications, use desktop_window_arrange at
 the beginning. It normalizes native fullscreen state and verifies the resulting
 window frames under the click-through HUD. Restore them when the user asks or when
 the session ends.
+Interpret window requests as workspace goals, not merely geometry commands. Preserve
+visibility, give cooperating apps balanced usable space, prefer the largest connected
+display for a two-app stage, and account for each application's minimum size. If a
+balanced horizontal split is physically impossible, use an even vertical stage and
+briefly explain the constraint instead of claiming that a severely lopsided layout is
+side by side. Keep the primary work application visible throughout the task.
 Use the live execution feed for operational detail; spoken progress should mention
 only meaningful milestones, blockers, and final verification, not every click.
 When asked what failed or what happened previously, search durable task history;
@@ -110,6 +116,7 @@ class JarvisAssistant:
         self.tts_model = os.getenv("OPENAI_TTS_MODEL", "tts-1")
         self.previous_response_id: str | None = None
         self.last_selected_tools: list[dict] = []
+        self.local_session_turns: list[dict[str, str]] = []
         self.task_engine = TaskEngine()
         self.platform = platform()
 
@@ -125,7 +132,20 @@ class JarvisAssistant:
         """Start the next wake session as a fresh ChatGPT-style conversation."""
         self.previous_response_id = None
         self.last_selected_tools = []
+        self.local_session_turns = []
         self.task_engine.reset()
+        try:
+            import execution_engine
+            execution_engine.clear_pending_intent()
+        except Exception:
+            pass
+
+    def record_turn(self, user: str, assistant: str, *, local: bool = False) -> None:
+        """Retain locally answered turns that are absent from the cloud thread."""
+        if not local:
+            return
+        self.local_session_turns.append({"user": user[:800], "assistant": assistant[:1200]})
+        self.local_session_turns = self.local_session_turns[-6:]
 
     def ask(self, question: str, request_id: str = "") -> str:
         activity.update("planning", "Planning…")
@@ -143,11 +163,19 @@ class JarvisAssistant:
         )
         request_text = question.rsplit("\nUser:", 1)[-1].strip()
         local_context = self.platform.context_for(request_text)
-        selected_tools = tools.select_definitions(request_text)
-        continuation = request_text.lower().rstrip(".!?") in {
+        normalized_followup = " ".join(re.sub(r"[^a-z0-9 ]", " ", request_text.lower()).split())
+        continuation = normalized_followup in {
             "yes", "yes please", "continue", "go ahead", "do it", "try again", "keep going", "please do",
+            "yeah", "yeah do it", "yes do it", "check it", "check again",
         }
-        if not selected_tools and continuation and self.previous_response_id:
+        referential = continuation or any(marker in normalized_followup for marker in (
+            "did you check", "didnt work", "wasnt", "still pending", "changes pending", "literally see",
+        ))
+        selection_request = request_text
+        if referential and self.local_session_turns:
+            selection_request += "\nRecent local turn: " + json.dumps(self.local_session_turns[-1])
+        selected_tools = tools.select_definitions(selection_request)
+        if not selected_tools and continuation and self.last_selected_tools:
             selected_tools = self.last_selected_tools
         elif selected_tools:
             self.last_selected_tools = selected_tools
@@ -156,6 +184,12 @@ class JarvisAssistant:
         context_suffix = ""
         if any(local_context.values()):
             context_suffix = "\n\nRelevant user-authorized local context:\n" + json.dumps(local_context)
+        if self.local_session_turns:
+            context_suffix += (
+                "\n\nRecent turns completed locally in this same active conversation "
+                "(resolve references and follow-ups against these):\n"
+                + json.dumps(self.local_session_turns[-4:])
+            )
         planned_input = (question + context_suffix) if not complex_task else (
             f"User request:\n{question}\n\nStructured task plan:\n{self.task_engine.context()}\n"
             "Execute the entire plan now. Do not merely describe it." + context_suffix
@@ -267,7 +301,37 @@ class JarvisAssistant:
             else:
                 outputs = [run_call(call) for call in calls]
 
-            if not complex_task and completed_calls and all(result.get("ok") for _, _, result in completed_calls):
+            opened_apps = list(dict.fromkeys(
+                str(result.get("application") or arguments.get("name") or "").strip()
+                for name, arguments, result in completed_calls
+                if name == "open_application" and result.get("ok")
+            ))
+            if len(opened_apps) >= 2:
+                # Separate open calls are not a valid multi-app workspace. Stage
+                # and verify the pair as one unit before reporting completion.
+                import desktop
+                arranged = desktop.arrange_windows(opened_apps[:2], confirmed=True)
+                self.task_engine.record_tool("desktop_window_arrange", arranged)
+                activity.record_step("arrange_opened_workspace", ", ".join(opened_apps[:2]), arranged)
+                diagnostics.event(
+                    "paired_workspace_verified", request_id=request_id,
+                    applications=opened_apps[:2], ok=bool(arranged.get("ok")),
+                    layout=arranged.get("layout", ""),
+                )
+                if not arranged.get("ok"):
+                    completed_calls.append(("desktop_window_arrange", {"applications": opened_apps[:2]}, arranged))
+
+            locally_final_tools = {
+                "quit_application", "browser_navigate", "set_system_volume", "show_notification",
+                "spotify_control", "spotify_play_playlist", "create_reminder", "create_note",
+            }
+            if re.match(r"^\s*(?:open|launch|start)\b", request_text, re.IGNORECASE):
+                locally_final_tools.add("open_application")
+            if (
+                not complex_task and completed_calls
+                and all(result.get("ok") for _, _, result in completed_calls)
+                and all(name in locally_final_tools for name, _, _ in completed_calls)
+            ):
                 summaries = [tools.result_summary(name, arguments, result) for name, arguments, result in completed_calls]
                 if all(summaries):
                     answer = " ".join(dict.fromkeys(summaries))
@@ -331,6 +395,8 @@ class JarvisAssistant:
                 )
                 text = str(result.get("text", "")).strip()
                 if text:
+                    text = self.sanitize_transcript(text)
+                if text:
                     diagnostics.event("local_transcription_completed", model=local_model, characters=len(text))
                     return text
             except Exception as exc:
@@ -346,7 +412,7 @@ class JarvisAssistant:
                     model=model, file=audio, language=language, stream=use_stream,
                 )
                 if hasattr(result, "text"):
-                    text = result.text.strip()
+                    text = self.sanitize_transcript(result.text.strip())
                     self.platform.record_cloud_event("transcription", model)
                     return text
                 final_text = ""
@@ -358,7 +424,7 @@ class JarvisAssistant:
                             activity.update("transcribing", "Hearing…", partial.strip()[-120:])
                     elif getattr(event, "type", "") == "transcript.text.done":
                         final_text = getattr(event, "text", "")
-                text = (final_text or partial).strip()
+                text = self.sanitize_transcript((final_text or partial).strip())
                 self.platform.record_cloud_event("transcription", model)
                 return text
         except Exception as exc:
@@ -369,9 +435,37 @@ class JarvisAssistant:
                 result = self.client.audio.transcriptions.create(
                     model=model, file=audio, language=language, stream=False,
                 )
-            text = result.text.strip()
+            text = self.sanitize_transcript(result.text.strip())
             self.platform.record_cloud_event("transcription", model)
             return text
+
+    @staticmethod
+    def sanitize_transcript(text: str) -> str:
+        """Reject obvious decoder loops instead of treating them as commands."""
+        text = " ".join(text.split()).strip()
+        words = re.findall(r"[a-z0-9']+", text.lower())
+        if not words:
+            return ""
+        longest_run = 1
+        run = 1
+        for previous, current in zip(words, words[1:]):
+            run = run + 1 if current == previous else 1
+            longest_run = max(longest_run, run)
+        unique_ratio = len(set(words)) / len(words)
+        corrupted = (
+            longest_run >= 8
+            or (len(words) >= 30 and unique_ratio < 0.18)
+            or (len(text) > 1200 and unique_ratio < 0.35)
+        )
+        if corrupted:
+            diagnostics.event(
+                "transcription_rejected", level="warning", reason="decoder_repetition",
+                characters=len(text), words=len(words), unique_ratio=round(unique_ratio, 3),
+                longest_run=longest_run,
+            )
+            activity.update("session", "Please repeat that", "The last audio could not be transcribed reliably")
+            return ""
+        return text
 
     @staticmethod
     def speech_text(text: str) -> str:

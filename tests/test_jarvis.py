@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from jarvis import (
-    is_authorized_logoff, is_authorized_session_close, is_logoff_command,
+    has_wake_phrase, is_authorized_logoff, is_authorized_session_close, is_logoff_command,
     is_satisfied_command, request_is_active,
     start_desktop_control, stop_desktop_control, strip_wake_word,
 )
@@ -17,6 +17,7 @@ class RequestActivationTests(unittest.TestCase):
         self.assertTrue(is_logoff_command("Hey, log off"))
         self.assertFalse(is_logoff_command("log off Spotify"))
         self.assertTrue(is_authorized_logoff("Hey Jarvis, log off", "jarvis"))
+        self.assertTrue(is_authorized_logoff("and hey Jarvis Logoff", "jarvis"))
         self.assertFalse(is_authorized_logoff("log off", "jarvis"))
 
     def test_baymax_style_satisfaction_ends_session(self):
@@ -29,6 +30,12 @@ class RequestActivationTests(unittest.TestCase):
     def test_wake_only_and_wake_with_prompt_are_cleaned(self):
         self.assertEqual(strip_wake_word("Hey Jarvis", "jarvis"), "")
         self.assertEqual(strip_wake_word("Hey Jarvis, open Safari", "jarvis"), "open Safari")
+        self.assertEqual(
+            strip_wake_word("Close everything related to the Jarvis workspace", "jarvis"),
+            "Close everything related to the Jarvis workspace",
+        )
+        self.assertFalse(has_wake_phrase("close the Jarvis project", "jarvis"))
+        self.assertTrue(has_wake_phrase("and hey Jarvis, log off", "jarvis"))
 
     def test_text_mode_does_not_require_hotword(self):
         self.assertTrue(

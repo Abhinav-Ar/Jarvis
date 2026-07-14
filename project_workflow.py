@@ -94,3 +94,38 @@ def close(notes: str = "") -> dict:
         "changed_files": changed, "warning": "Uncommitted work remains." if changed else "",
         "summary": summary,
     }
+
+
+def close_workspace(repository: str) -> dict:
+    """Close the bounded native workspace used for a named project.
+
+    This intentionally leaves Jarvis itself and unrelated Terminal/browser
+    windows running. Only the applications Jarvis owns for project sessions are
+    closed, after their pre-session window state is restored.
+    """
+    requested = repository.strip()
+    active = platform().active_project_session().get("session")
+    repository_name = active["repository"] if active and requested.lower() in {
+        active["repository"].lower(), Path(active["path"]).name.lower()
+    } else requested
+    warning = ""
+    if active and repository_name.lower() == active["repository"].lower():
+        ended = close()
+        warning = ended.get("warning", "")
+    applications = ["GitHub Desktop", "Visual Studio Code"]
+    desktop.restore_windows(applications, confirmed=True)
+    closed: list[str] = []
+    failed: list[str] = []
+    for application in applications:
+        result = mac_tools.quit_application(application)
+        if result.get("ok"):
+            closed.append(application)
+        elif result.get("error_code") != "application_not_running":
+            failed.append(application)
+    return {
+        "ok": not failed,
+        "repository": repository_name,
+        "closed_applications": closed,
+        "failed_applications": failed,
+        "warning": warning,
+    }

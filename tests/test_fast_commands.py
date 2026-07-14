@@ -14,7 +14,19 @@ class FastCommandTests(unittest.TestCase):
         answer = fast_commands.execute(
             "Open GitHub Desktop and Visual Studio Code, then arrange them so I can work in both"
         )
-        self.assertEqual(answer, "GitHub Desktop and Visual Studio Code are arranged side by side.")
+        self.assertEqual(answer, "GitHub Desktop and Visual Studio Code are arranged in a balanced side-by-side workspace.")
+        arrange.assert_called_once_with(["GitHub Desktop", "Visual Studio Code"], confirmed=True)
+
+    @patch("activity.record_step")
+    @patch("activity.update")
+    @patch("activity.set_execution_path")
+    @patch("desktop.arrange_windows", return_value={"ok": True})
+    @patch("fast_commands.mac_tools.application_exists", return_value=True)
+    def test_balanced_workspace_wording_is_one_paired_operation(self, exists, arrange, plan, update, record):
+        answer = fast_commands.execute(
+            "Open GitHub Desktop and Visual Studio Code and create a balanced workspace"
+        )
+        self.assertIn("balanced", answer)
         arrange.assert_called_once_with(["GitHub Desktop", "Visual Studio Code"], confirmed=True)
 
     @patch("fast_commands._stage")
@@ -71,6 +83,19 @@ class FastCommandTests(unittest.TestCase):
             fast_commands.execute("End project session"),
             "Closed the Jarvis project session. Uncommitted work remains.",
         )
+
+    @patch("project_workflow.close_workspace", return_value={
+        "ok": True,
+        "repository": "Jarvis",
+        "closed_applications": ["GitHub Desktop", "Visual Studio Code"],
+        "warning": "Uncommitted work remains.",
+    })
+    def test_close_named_project_workspace_preserves_project_name(self, close_workspace):
+        self.assertEqual(
+            fast_commands.execute("Close everything on my laptop related to the Jarvis project"),
+            "Closed GitHub Desktop, Visual Studio Code for the Jarvis project. Uncommitted work remains.",
+        )
+        close_workspace.assert_called_once_with("jarvis")
 
 
 if __name__ == "__main__":

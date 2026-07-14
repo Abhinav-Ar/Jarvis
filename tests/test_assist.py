@@ -36,6 +36,13 @@ class AssistantTests(unittest.TestCase):
         )
         self.assertEqual(spoken, "Latest: AP News and")
 
+    def test_repeated_decoder_hallucination_is_rejected(self):
+        self.assertEqual(JarvisAssistant.sanitize_transcript("and " + "modification " * 100), "")
+        self.assertEqual(
+            JarvisAssistant.sanitize_transcript("Commit and push the Jarvis project"),
+            "Commit and push the Jarvis project",
+        )
+
     @patch.dict(os.environ, {"JARVIS_LOCAL_TRANSCRIPTION": "0"})
     def test_streaming_transcription_returns_completed_text(self):
         events = iter([
@@ -101,6 +108,17 @@ class AssistantTests(unittest.TestCase):
         assistant.client = SimpleNamespace(responses=fake)
 
         self.assertEqual(assistant.ask("Local time: now\nUser: continue"), "Continuing.")
+        self.assertEqual(fake.calls[0]["tools"], assistant.last_selected_tools)
+
+    def test_punctuated_followup_reuses_local_tool_lane(self):
+        answer = SimpleNamespace(id="r3", output=[], output_text="I checked it.")
+        assistant = JarvisAssistant()
+        self.bypass_planner(assistant)
+        assistant.last_selected_tools = [{"type": "function", "name": "git_status"}]
+        fake = FakeResponses([answer])
+        assistant.client = SimpleNamespace(responses=fake)
+
+        self.assertEqual(assistant.ask("Local time: now\nUser: Yeah, do it."), "I checked it.")
         self.assertEqual(fake.calls[0]["tools"], assistant.last_selected_tools)
 
     def test_function_call_result_is_sent_back(self):

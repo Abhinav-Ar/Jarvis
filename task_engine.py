@@ -85,6 +85,7 @@ class TaskEngine:
             " and then ", "after that", "commit", "push", "fill out", "organize",
             "compare", "research", "all of", "multiple", "workflow", " then ",
             "arrange", "tile", "side by side", "both apps", "both applications",
+            "balanced workspace", "create a workspace", "set up a workspace",
         )
         return "complex" if any(marker in text for marker in markers) else "simple"
 

@@ -259,6 +259,12 @@ if !["screenshot", "screenshot-app", "ocr-app", "list-windows"].contains(action)
 }
 
 switch action {
+case "list-displays":
+    let records = displayRecords().map { displayID, frame in
+        ["id": displayID, "frame": frameRecord(frame)] as [String: Any]
+    }
+    let data = try! JSONSerialization.data(withJSONObject: ["ok": true, "displays": records])
+    print(String(data: data, encoding: .utf8)!)
 case "window-state":
     let application = applicationElement(args[2])
     let window = primaryWindow(application)

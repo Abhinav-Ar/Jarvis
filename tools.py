@@ -399,7 +399,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "type": "function", "name": "desktop_window_arrange",
-        "description": "Normalize fullscreen state, then move and resize one or two named application windows into a verified display-aware work stage behind the click-through Jarvis HUD. Use at the start of visible multi-step app work. This is reversible.",
+        "description": "Normalize fullscreen state, then create a verified, reversible workspace for one or two named applications behind the click-through Jarvis HUD. For two apps, prefer the largest connected display and balanced usable space; if app minimum sizes prevent a balanced horizontal split, use an even vertical stage rather than a cramped lopsided layout.",
         "parameters": {
             "type": "object",
             "properties": {

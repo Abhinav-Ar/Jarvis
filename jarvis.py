@@ -31,7 +31,25 @@ def arguments() -> argparse.Namespace:
 
 def request_is_active(text: str, *, text_mode: bool, no_hotword: bool, follow_up: bool, hotword: str) -> bool:
     """Text is always active; voice requires its wake word unless in a follow-up."""
-    return text_mode or no_hotword or follow_up or hotword in text.lower()
+    return text_mode or no_hotword or follow_up or has_wake_phrase(text, hotword)
+
+
+def _wake_prefix(hotword: str) -> re.Pattern[str]:
+    """Match activation language only at the start of an utterance.
+
+    Barge-in transcription sometimes retains a leading conjunction from the
+    sentence Jarvis was speaking, so a single "and" is accepted before the
+    activation phrase. Mentions such as "the Jarvis project" are not wakeups.
+    """
+    escaped = re.escape(hotword.strip())
+    return re.compile(
+        rf"^\s*(?:(?:and|but)\s+)?(?:(?:hey|okay|ok)\s+)?{escaped}\b[\s,.:;!?-]*",
+        flags=re.IGNORECASE,
+    )
+
+
+def has_wake_phrase(text: str, hotword: str) -> bool:
+    return bool(_wake_prefix(hotword).match(text))
 
 
 def is_logoff_command(text: str) -> bool:
@@ -39,7 +57,7 @@ def is_logoff_command(text: str) -> bool:
     for prefix in ("hey ", "okay ", "ok ", "please "):
         if normalized.startswith(prefix):
             normalized = normalized[len(prefix):]
-    return normalized in {"log off", "log out", "logout", "go offline", "shut down jarvis"}
+    return normalized in {"log off", "logoff", "log out", "logout", "go offline", "shut down jarvis"}
 
 
 def is_satisfied_command(text: str) -> bool:
@@ -49,21 +67,16 @@ def is_satisfied_command(text: str) -> bool:
 
 
 def strip_wake_word(text: str, hotword: str) -> str:
-    lowered = text.lower()
-    if hotword not in lowered:
-        return text.strip()
-    index = lowered.index(hotword)
-    result = (text[:index] + text[index + len(hotword):]).strip(" ,.!?")
-    result = re.sub(r"^(hey|okay|ok)\b[\s,]*", "", result, flags=re.IGNORECASE)
-    return result.strip(" ,.!?")
+    match = _wake_prefix(hotword).match(text)
+    return (text[match.end():] if match else text).strip(" ,.!?")
 
 
 def is_authorized_logoff(text: str, hotword: str) -> bool:
-    return hotword.lower() in text.lower() and is_logoff_command(strip_wake_word(text, hotword.lower()))
+    return has_wake_phrase(text, hotword) and is_logoff_command(strip_wake_word(text, hotword))
 
 
 def is_authorized_session_close(text: str, hotword: str) -> bool:
-    return hotword.lower() in text.lower() and is_satisfied_command(strip_wake_word(text, hotword.lower()))
+    return has_wake_phrase(text, hotword) and is_satisfied_command(strip_wake_word(text, hotword))
 
 
 def stop_desktop_control() -> None:
@@ -85,6 +98,7 @@ def is_complex_request(text: str) -> bool:
     markers = (
         " and then ", " then ", "commit", "push", "fill out", "organize",
         "all of", "after that", "arrange", "tile", "side by side", "both apps",
+        "balanced workspace", "create a workspace", "set up a workspace",
     )
     return any(marker in lowered for marker in markers)
 
@@ -171,7 +185,7 @@ def main() -> int:
                 activity.update("session" if session_active else "listening", "Say Jarvis to continue" if session_active else "Listening")
                 continue
 
-            wake_detected = hotword in text.lower()
+            wake_detected = has_wake_phrase(text, hotword)
             request_id = uuid.uuid4().hex[:12]
             if wake_detected:
                 if not session_active:
@@ -242,6 +256,7 @@ def main() -> int:
                 )
                 fast_reply = None
             reply = fast_reply or assistant.ask(prompt, request_id=request_id)
+            assistant.record_turn(text, reply, local=fast_reply is not None)
             thinking_seconds = time.perf_counter() - thinking_started
             diagnostics.event("request_answer_ready", request_id=request_id, duration_ms=round(thinking_seconds * 1000), response_chars=len(reply))
             print(f"Jarvis ({thinking_seconds:.1f}s thinking): {reply}")

@@ -112,21 +112,25 @@ def quit_application(name: str) -> dict:
     name = canonical_application_name(name)
     if not name:
         return {"ok": False, "error_code": "missing_application", "requires_user": True, "error": "An application name is required."}
+    process_names = APP_PROCESS_NAMES.get(name, [name])
     _run([
         "/usr/bin/osascript", "-l", "JavaScript", "-e",
         "function run(argv) { Application(argv[0]).quit(); return 'requested'; }", name,
     ])
     script = """on run argv
-set appName to item 1 of argv
 tell application "System Events"
   repeat 30 times
-    if not (exists (first application process whose name is appName)) then return "closed"
+    set anyRunning to false
+    repeat with appName in argv
+      if exists (first application process whose name is appName) then set anyRunning to true
+    end repeat
+    if not anyRunning then return "closed"
     delay 0.1
   end repeat
 end tell
 return "still_running"
 end run"""
-    status = _apple(script, name)
+    status = _apple(script, *process_names)
     if status == "closed":
         return {"ok": True, "application": name, "closed": True}
     return {

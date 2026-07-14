@@ -34,6 +34,32 @@ class DesktopSafetyTests(unittest.TestCase):
                 result = desktop.arrange_windows(["Safari"], confirmed=False)
         self.assertTrue(result["confirmation_required"])
 
+    @patch("desktop.mac_tools.open_application", return_value={"ok": True})
+    def test_lopsided_pair_is_rejected_and_replaced_with_balanced_stack(self, opened):
+        display = {"x": 0, "y": 0, "width": 1440, "height": 900}
+        helper_results = [
+            {"ok": True, "displays": [{"id": 1, "frame": display}]},
+            {"ok": True, "frame": {"x": 10, "y": 30, "width": 900, "height": 700}},
+            {"ok": True, "display_id": 1, "display_frame": display,
+             "frame": {"x": 12, "y": 34, "width": 960, "height": 842}},
+            {"ok": True, "frame": {"x": 20, "y": 40, "width": 800, "height": 600}},
+            {"ok": True, "frame": {"x": 982, "y": 34, "width": 446, "height": 842}},
+            {"ok": True, "frame": {"x": 12, "y": 34, "width": 1416, "height": 416}},
+            {"ok": True, "frame": {"x": 12, "y": 460, "width": 1416, "height": 416}},
+        ]
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            control = root / "enabled"; control.touch()
+            with patch.object(desktop, "CONTROL_FLAG", control), patch.object(
+                desktop, "WINDOW_STATE_FILE", root / "windows.json"
+            ), patch("desktop._helper_json", side_effect=helper_results) as helper:
+                result = desktop.arrange_windows(["GitHub Desktop", "Visual Studio Code"], confirmed=True)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["layout"], "stack")
+        final_calls = [call.args[0] for call in helper.call_args_list[-2:]]
+        self.assertEqual(final_calls[0][0:2], ["window-place", "GitHub Desktop"])
+        self.assertEqual(final_calls[1][0:2], ["window-place", "Visual Studio Code"])
+
     @patch("desktop.CONTROL_FLAG")
     def test_actions_are_blocked_when_menu_toggle_is_off(self, control_flag):
         control_flag.exists.return_value = False

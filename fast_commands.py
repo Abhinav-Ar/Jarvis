@@ -22,7 +22,10 @@ def execute(text: str) -> str | None:
     raw = " ".join(text.lower().strip().split()).rstrip(".,!?")
     raw = re.sub(r"^(?:hey|okay|ok|please)[, ]+", "", raw)
     workspace_match = re.fullmatch(
-        r"(?:open|launch) (.+?) and (.+?)(?:,)? then (?:arrange|tile) (?:them|the windows)(?: .*)?",
+        r"(?:open|launch) (.+?) and (.+?)(?:,)? (?:"
+        r"then (?:arrange|tile) (?:them|the windows)(?: .*)?"
+        r"|and (?:create|make|set up) (?:a )?(?:balanced )?workspace(?: .*)?"
+        r")",
         raw,
     )
     tile_match = re.fullmatch(r"(?:arrange|tile) (.+?) and (.+?) side by side", raw)
@@ -40,7 +43,12 @@ def execute(text: str) -> str | None:
             result = desktop.arrange_windows(applications, confirmed=True)
             activity.record_step("arrange_two_app_workspace", ", ".join(applications), result)
             if result.get("ok"):
-                return f"{applications[0]} and {applications[1]} are arranged side by side."
+                if result.get("layout") == "stack":
+                    return (
+                        f"I arranged {applications[0]} and {applications[1]} in an even stacked workspace "
+                        "because their minimum widths would make a side-by-side layout cramped on this display."
+                    )
+                return f"{applications[0]} and {applications[1]} are arranged in a balanced side-by-side workspace."
             return f"I couldn’t finish the window layout. {result.get('error', 'The window state could not be verified.')}"
     combined_navigation = re.fullmatch(
         r"(?:open|launch) safari (?:and|then|and then) (?:open|go to|navigate to) (https?://\S+|(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}(?:/\S*)?)",
@@ -118,6 +126,19 @@ def execute(text: str) -> str | None:
         name = playlist_match.group(1).strip()
         result = spot.play_playlist(name)
         return f"Playing {result.get('name', name)}." if result.get("ok") else None
+
+    project_close_match = re.fullmatch(
+        r"(?:close|quit) everything(?: on my (?:laptop|mac|computer))? related to (?:the )?(.+?) (?:project|workspace)",
+        command,
+    )
+    if project_close_match:
+        import project_workflow
+        result = project_workflow.close_workspace(project_close_match.group(1).strip())
+        if result.get("ok"):
+            closed = ", ".join(result.get("closed_applications", [])) or "the project workspace"
+            warning = f" {result['warning']}" if result.get("warning") else ""
+            return f"Closed {closed} for the {result['repository']} project.{warning}".strip()
+        return None
 
     close_match = re.fullmatch(r"(?:close|quit|exit)(?: out of)? (?:the )?(.+?)(?: app| application)?", command)
     if close_match:

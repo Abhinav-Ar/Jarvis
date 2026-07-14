@@ -127,6 +127,19 @@ def arrange_windows(applications: list[str], confirmed: bool = False) -> dict:
     states = _window_states()
     results: list[dict] = []
     display_id = ""
+    if len(names) == 2:
+        display_result = _helper_json(["list-displays", "all"])
+        displays = display_result.get("displays", []) if display_result.get("ok") else []
+        if displays:
+            # A two-app workspace should use the display that can provide the
+            # most useful balanced canvas. This also avoids squeezing a second
+            # app beside an application with a large minimum window width.
+            preferred = max(
+                displays,
+                key=lambda item: float(item.get("frame", {}).get("width", 0))
+                * float(item.get("frame", {}).get("height", 0)),
+            )
+            display_id = str(preferred.get("id", ""))
     for index, name in enumerate(names):
         opened = mac_tools.open_application(name)
         if not opened.get("ok"):
@@ -185,7 +198,14 @@ def arrange_windows(applications: list[str], confirmed: bool = False) -> dict:
         first, second = results[0].get("frame", {}), results[1].get("frame", {})
         display_right = float(display["x"]) + float(display["width"])
         overlap = min(float(first.get("x", 0)) + float(first.get("width", 0)), float(second.get("x", 0)) + float(second.get("width", 0))) - max(float(first.get("x", 0)), float(second.get("x", 0)))
-        invalid_horizontal = overlap > 18 or float(second.get("x", 0)) + float(second.get("width", 0)) > display_right + 18
+        first_width = float(first.get("width", 0))
+        second_width = float(second.get("width", 0))
+        balance_ratio = max(first_width, second_width) / max(1, min(first_width, second_width))
+        invalid_horizontal = (
+            overlap > 18
+            or float(second.get("x", 0)) + second_width > display_right + 18
+            or balance_ratio > 1.25
+        )
         if invalid_horizontal:
             # Negotiate a vertical stage when the apps' own minimum widths make a
             # non-overlapping horizontal split impossible on this display.
@@ -203,7 +223,11 @@ def arrange_windows(applications: list[str], confirmed: bool = False) -> dict:
             top["layout"] = "stack-top"
             bottom["layout"] = "stack-bottom"
             results = [top, bottom]
-            diagnostics.event("window_layout_recovered", applications=names, recovery="vertical_constraint_layout")
+            diagnostics.event(
+                "window_layout_recovered", applications=names,
+                recovery="balanced_vertical_constraint_layout", previous_width_ratio=round(balance_ratio, 2),
+                frames=[top.get("frame", {}), bottom.get("frame", {})],
+            )
     try:
         WINDOW_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         WINDOW_STATE_FILE.write_text(json.dumps(states), encoding="utf-8")

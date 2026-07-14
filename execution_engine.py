@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import re
+import json
+import os
 import time
 import uuid
+from pathlib import Path
 
 import activity
 import desktop
@@ -14,9 +17,136 @@ import mac_tools
 from agent_platform import platform
 
 
+def _pending_path() -> Path:
+    runtime = Path(os.getenv("JARVIS_RUNTIME_DIR", Path.home() / "Library/Application Support/Jarvis/.runtime"))
+    return runtime / "pending-intent.json"
+
+
+def _last_git_path() -> Path:
+    runtime = Path(os.getenv("JARVIS_RUNTIME_DIR", Path.home() / "Library/Application Support/Jarvis/.runtime"))
+    return runtime / "last-git-context.json"
+
+
+def clear_pending_intent() -> None:
+    _pending_path().unlink(missing_ok=True)
+
+
+def _save_pending_git(request: str, candidates: list[str]) -> None:
+    path = _pending_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "kind": "git_repository",
+            "request": request,
+            "candidates": candidates,
+            "created": time.time(),
+        }), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _save_last_git_context(repository: str, request: str, wants_commit: bool, wants_push: bool) -> None:
+    path = _last_git_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "repository": repository,
+            "request": request,
+            "wants_commit": wants_commit,
+            "wants_push": wants_push,
+            "updated": time.time(),
+        }), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _verify_recent_git_correction(request: str) -> str | None:
+    text = request.lower()
+    correction = any(marker in text for marker in (
+        "wasn't", "was not", "didn't", "did not", "did you check", "check again",
+        "still pending", "changes pending", "literally see", "not pushed", "didn't work",
+    ))
+    if not correction:
+        return None
+    try:
+        context = json.loads(_last_git_path().read_text(encoding="utf-8"))
+        if time.time() - float(context.get("updated", 0)) > 600:
+            return None
+        repository = str(context["repository"])
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+    state = git_tools.status(repository)
+    sync = git_tools.sync_status(repository)
+    if not state.get("ok") or not sync.get("ok"):
+        return None
+    count = len(state.get("changed_files", []))
+    ahead = sync.get("ahead")
+    diagnostics.event(
+        "git_followup_verified", repository=repository,
+        changed_files=count, ahead=ahead, request=request[:300],
+    )
+    if count:
+        suffix = " Existing commits are synchronized." if ahead == 0 else f" There are also {ahead} committed changes waiting to be pushed."
+        return f"I checked {repository}: {count} files are still uncommitted.{suffix}"
+    if ahead not in {0, None}:
+        return f"I checked {repository}: the working tree is clean, but {ahead} committed changes are still waiting to be pushed."
+    return f"I checked {repository}: the working tree is clean and the branch is synchronized with GitHub."
+
+
+def _resume_pending_git(request: str) -> str | None:
+    path = _pending_path()
+    try:
+        pending = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if pending.get("kind") != "git_repository" or time.time() - float(pending.get("created", 0)) > 600:
+        clear_pending_intent()
+        return None
+    text = " ".join(request.lower().split()).strip(" .!?")
+    candidates = [str(value) for value in pending.get("candidates", [])]
+    selected = next((candidate for candidate in candidates if re.search(rf"\b{re.escape(candidate.lower())}\b", text)), None)
+    followup_shape = len(text.split()) <= 18 and (
+        text.startswith(("for ", "use ", "the ", "on ", "in ", "you should "))
+        or _git_intent(request) is not None
+    )
+    if not selected or not followup_shape:
+        return None
+    original = str(pending.get("request", ""))
+    clear_pending_intent()
+    result = run_git_workflow(f"{original} for the {selected} repository")
+    return (result.get("summary") or result.get("error")) if result else None
+
+
 def _explicit_ui(request: str) -> bool:
     text = request.lower()
-    return any(marker in text for marker in ("use the ui", "from the ui", "ui itself", "click specifically", "click the button"))
+    return any(marker in text for marker in (
+        "use the ui", "from the ui", "ui itself", "click specifically", "click the button",
+        "app directly", "from the app", "ui directly",
+    ))
+
+
+def _mentions_github_desktop(request: str) -> bool:
+    text = request.lower()
+    return any(marker in text for marker in (
+        "github desktop", "getup desktop", "github app", "app directly", "from the app",
+    ))
+
+
+def _resume_recent_git_in_app(request: str) -> str | None:
+    if not _explicit_ui(request) or _git_intent(request) is not None:
+        return None
+    try:
+        context = json.loads(_last_git_path().read_text(encoding="utf-8"))
+        if time.time() - float(context.get("updated", 0)) > 600:
+            return None
+        repository = str(context["repository"])
+        original = str(context.get("request", ""))
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+    result = run_git_workflow(
+        f"{original} for the {repository} repository using GitHub Desktop UI directly"
+    )
+    return (result.get("summary") or result.get("error")) if result else None
 
 
 def _git_intent(request: str) -> tuple[bool, bool] | None:
@@ -25,7 +155,8 @@ def _git_intent(request: str) -> tuple[bool, bool] | None:
         marker in text for marker in ("problem i", "problem that", "what happened", "why did", "trying to commit")
     ):
         return None
-    commit = bool(re.search(r"\bcommit(?:ted)?\b", text))
+    push_changes = bool(re.search(r"\bpush\s+(?:(?:all|my|the|these|those|our)\s+)*changes\b", text))
+    commit = bool(re.search(r"\bcommit(?:ted)?\b", text)) or push_changes
     push = bool(re.search(r"\bpush(?:ed)?\b|\bpublish\b", text))
     return (commit, push) if commit or push else None
 
@@ -42,7 +173,7 @@ def _infer_repository(request: str) -> dict:
     active = platform().active_project_session().get("session")
     if active:
         return {"ok": True, "repository": active["repository"], "source": "active_project"}
-    if "github desktop" in lowered:
+    if _mentions_github_desktop(request):
         ocr = desktop.local_ocr("GitHub Desktop")
         if ocr.get("ok"):
             visible_text = " ".join(str(item.get("text", "")) for item in ocr.get("text", [])).lower()
@@ -174,15 +305,18 @@ def run_git_workflow(request: str) -> dict | None:
     inferred = _infer_repository(request)
     if not inferred.get("ok"):
         candidates = ", ".join(inferred.get("candidates", []))
+        _save_pending_git(request, inferred.get("candidates", []))
         return {**inferred, "handled": True, "summary": f"I need the repository name first. Changed repositories: {candidates}."}
+    clear_pending_intent()
     repository = inferred["repository"]
+    _save_last_git_context(repository, request, wants_commit, wants_push)
     run = WorkflowRun(
         request, "git_commit_push", f"Commit and/or push {repository} and verify the result",
         ["Identify the repository", "Review changed files", "Create the commit", "Synchronize with GitHub", "Verify the final state"],
     )
     activity.update("working", "Repository identified", f"{repository} • reviewing changed files")
     activity.announce(f"I found {repository}. I’m reviewing the changes now.", key="git_review")
-    if "github desktop" in request.lower():
+    if _mentions_github_desktop(request):
         opened = run.event("open_github_desktop", mac_tools.open_application("GitHub Desktop"))
         if not opened.get("ok"):
             return run.finish(opened, "GitHub Desktop could not be opened.")
@@ -206,7 +340,7 @@ def run_git_workflow(request: str) -> dict | None:
 
     if wants_push and use_ui and result.get("ok"):
         result = run.event("verify_or_push", _github_desktop_push(run, repository))
-    elif wants_push and not result.get("ok") and result.get("error_code") in {"remote_permission_denied", "authentication_required"} and "github desktop" in request.lower():
+    elif wants_push and not result.get("ok") and result.get("error_code") in {"remote_permission_denied", "authentication_required"} and _mentions_github_desktop(request):
         activity.update("working", "Trying GitHub Desktop’s signed-in session…", repository)
         result = run.event("authenticated_desktop_push_recovery", _github_desktop_push(run, repository))
 
@@ -217,6 +351,11 @@ def run_git_workflow(request: str) -> dict | None:
             result = {"ok": False, "error_code": "push_not_verified", "error": "A local commit is still waiting to be pushed."}
         elif wants_commit and not verification.get("working_tree_clean"):
             result = {"ok": False, "error_code": "commit_not_verified", "error": "Uncommitted changes remain after the commit attempt."}
+        elif wants_push and not verification.get("working_tree_clean"):
+            result = {
+                "ok": False, "error_code": "uncommitted_changes_remain",
+                "error": "Existing commits were synchronized, but uncommitted files remain and were not included.",
+            }
         else:
             result = {**result, "verification": verification}
 
@@ -279,6 +418,15 @@ def recent_failure_summary(request: str) -> str | None:
 
 
 def try_execute(request: str) -> str | None:
+    correction_reply = _verify_recent_git_correction(request)
+    if correction_reply:
+        return correction_reply
+    pending_reply = _resume_pending_git(request)
+    if pending_reply:
+        return pending_reply
+    app_retry = _resume_recent_git_in_app(request)
+    if app_retry:
+        return app_retry
     history_reply = recent_failure_summary(request)
     if history_reply:
         return history_reply

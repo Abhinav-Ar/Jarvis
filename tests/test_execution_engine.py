@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
 import execution_engine
@@ -83,6 +85,60 @@ class ExecutionEngineTests(unittest.TestCase):
         with patch("execution_engine.platform", return_value=self.platform):
             answer = execution_engine.recent_failure_summary("What problem did you run into?")
         self.assertIn("GitHub rejected the push", answer)
+
+    @patch("execution_engine.run_git_workflow")
+    def test_repository_answer_resumes_pending_git_intent(self, run_workflow):
+        run_workflow.return_value = {"ok": True, "summary": "Jarvis was committed and pushed."}
+        with TemporaryDirectory() as folder, patch.dict("os.environ", {"JARVIS_RUNTIME_DIR": folder}):
+            execution_engine._save_pending_git(
+                "Commit and push my changes", ["FitnessGooner", "Jarvis"]
+            )
+            answer = execution_engine._resume_pending_git("for the Jarvis project")
+            self.assertEqual(answer, "Jarvis was committed and pushed.")
+            self.assertFalse((Path(folder) / "pending-intent.json").exists())
+        run_workflow.assert_called_once_with(
+            "Commit and push my changes for the Jarvis repository"
+        )
+
+    @patch("execution_engine.run_git_workflow")
+    def test_repository_restatement_resumes_pending_git_intent(self, run_workflow):
+        run_workflow.return_value = {"ok": True, "summary": "Jarvis was committed and pushed."}
+        with TemporaryDirectory() as folder, patch.dict("os.environ", {"JARVIS_RUNTIME_DIR": folder}):
+            execution_engine._save_pending_git(
+                "Commit my changes and push on getup desktop", ["FitnessGooner", "Jarvis"]
+            )
+            answer = execution_engine._resume_pending_git("You should commit and push the Jarvis app")
+        self.assertEqual(answer, "Jarvis was committed and pushed.")
+        run_workflow.assert_called_once_with(
+            "Commit my changes and push on getup desktop for the Jarvis repository"
+        )
+
+    @patch("execution_engine.run_git_workflow")
+    def test_app_directly_resumes_last_git_operation_with_ui(self, run_workflow):
+        run_workflow.return_value = {"ok": True, "summary": "Pushed through GitHub Desktop."}
+        with TemporaryDirectory() as folder, patch.dict("os.environ", {"JARVIS_RUNTIME_DIR": folder}):
+            execution_engine._save_last_git_context("Jarvis", "Commit and push my changes", True, True)
+            answer = execution_engine._resume_recent_git_in_app("Can you do it from the app directly?")
+        self.assertEqual(answer, "Pushed through GitHub Desktop.")
+        self.assertIn("using GitHub Desktop UI directly", run_workflow.call_args.args[0])
+
+    def test_push_my_changes_implies_commit_and_push(self):
+        self.assertEqual(
+            execution_engine._git_intent("Push my changes on GitHub Desktop"),
+            (True, True),
+        )
+
+    @patch("execution_engine.git_tools.sync_status", return_value={
+        "ok": True, "ahead": 0, "working_tree_clean": False,
+    })
+    @patch("execution_engine.git_tools.status", return_value={
+        "ok": True, "changed_files": [" M one.py", " M two.py"], "has_changes": True,
+    })
+    def test_correction_verifies_recent_git_state_instead_of_promising(self, status, sync):
+        with TemporaryDirectory() as folder, patch.dict("os.environ", {"JARVIS_RUNTIME_DIR": folder}):
+            execution_engine._save_last_git_context("Jarvis", "Push my changes", True, True)
+            answer = execution_engine._verify_recent_git_correction("No, it wasn't. I can see changes pending.")
+        self.assertEqual(answer, "I checked Jarvis: 2 files are still uncommitted. Existing commits are synchronized.")
 
 
 if __name__ == "__main__":

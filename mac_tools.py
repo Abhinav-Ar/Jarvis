@@ -6,6 +6,7 @@ import platform
 import subprocess
 import time
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import urlparse
 
 import psutil
@@ -16,11 +17,35 @@ APP_ALIASES = {
     "github": "GitHub Desktop", "github desktop": "GitHub Desktop",
     "code": "Visual Studio Code", "vs code": "Visual Studio Code",
     "vscode": "Visual Studio Code", "finder": "Finder",
+    "blender": "Blender",
+    "freecad": "FreeCAD", "free cad": "FreeCAD",
+    "openscad": "OpenSCAD", "open scad": "OpenSCAD",
+    "davinci": "DaVinci Resolve", "davinci resolve": "DaVinci Resolve",
+    "da vinci": "DaVinci Resolve", "da vinci resolve": "DaVinci Resolve",
+    "resolve": "DaVinci Resolve",
 }
 
 APP_PROCESS_NAMES = {
     "Visual Studio Code": ["Visual Studio Code", "Code"],
     "Google Chrome": ["Google Chrome", "Chrome"],
+    "Blender": ["Blender"],
+    "FreeCAD": ["FreeCAD", "FreeCAD_1.1.1"],
+    "OpenSCAD": ["OpenSCAD"],
+    "DaVinci Resolve": ["Resolve", "DaVinci Resolve"],
+}
+
+WORKSPACE_APP_BUNDLES = {
+    "Blender": ("Blender.app",),
+    "FreeCAD": ("FreeCAD.app", "FreeCAD-*.app"),
+    "OpenSCAD": ("OpenSCAD.app", "OpenSCAD-*.app"),
+    "DaVinci Resolve": ("DaVinci Resolve.app", "DaVinci Resolve/DaVinci Resolve.app"),
+}
+
+WORKSPACE_APP_CAPABILITIES = {
+    "Blender": ["3d_modeling", "sculpting", "animation", "rendering", "python_scripting"],
+    "FreeCAD": ["parametric_cad", "technical_drawings", "python_scripting"],
+    "OpenSCAD": ["code_generated_cad", "parametric_models", "stl_export"],
+    "DaVinci Resolve": ["video_editing", "color_grading", "audio_post", "motion_graphics"],
 }
 
 
@@ -29,7 +54,29 @@ def canonical_application_name(name: str) -> str:
     return APP_ALIASES.get(cleaned.lower(), cleaned.title().replace("Github", "GitHub"))
 
 
+def application_bundle_path(name: str) -> Path | None:
+    canonical = canonical_application_name(name)
+    patterns = WORKSPACE_APP_BUNDLES.get(canonical, ())
+    for root in (Path("/Applications"), Path.home() / "Applications"):
+        for pattern in patterns:
+            matches = sorted(root.glob(pattern))
+            if matches:
+                return matches[0]
+    return None
+
+
+def workspace_applications() -> list[dict]:
+    installed = []
+    for name, capabilities in WORKSPACE_APP_CAPABILITIES.items():
+        bundle = application_bundle_path(name)
+        if bundle:
+            installed.append({"name": name, "bundle": str(bundle), "capabilities": capabilities})
+    return installed
+
+
 def application_exists(name: str) -> bool:
+    if application_bundle_path(name):
+        return True
     result = subprocess.run(
         ["/usr/bin/open", "-Ra", canonical_application_name(name)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
@@ -48,7 +95,11 @@ def _apple(script: str, *args: str) -> str:
 
 def open_application(name: str) -> dict:
     name = canonical_application_name(name)
-    subprocess.run(["/usr/bin/open", "-a", name], check=True, timeout=20)
+    bundle = application_bundle_path(name)
+    subprocess.run(
+        ["/usr/bin/open", str(bundle)] if bundle else ["/usr/bin/open", "-a", name],
+        check=True, timeout=20,
+    )
     # The process can be alive with every window closed. A standard reopen event
     # restores its normal window without launching a duplicate instance.
     subprocess.run(
@@ -105,6 +156,72 @@ return "opened"
 end run"""
     status = _apple(script, *APP_PROCESS_NAMES.get(name, [name]))
     return {"ok": True, "application": name, "frontmost": status == "frontmost"}
+
+
+def open_file_in_application(path: str | Path, application: str) -> dict:
+    """Open an exact document in its native app and verify its window title.
+
+    Merely activating an application is not evidence that the requested document
+    was loaded.  This helper sends the document through LaunchServices and waits
+    for the application to expose that document in a visible window.
+    """
+    document = Path(path).expanduser().resolve()
+    application = canonical_application_name(application)
+    if not document.is_file():
+        return {
+            "ok": False, "application": application, "path": str(document),
+            "error_code": "document_not_found", "error": f"The project file does not exist: {document}",
+        }
+    bundle = application_bundle_path(application)
+    if not bundle:
+        return {
+            "ok": False, "application": application, "path": str(document),
+            "error_code": "application_not_found", "error": f"{application} is not installed.",
+        }
+    try:
+        subprocess.run(
+            ["/usr/bin/open", "-a", str(bundle), str(document)],
+            check=True, capture_output=True, text=True, timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {
+            "ok": False, "application": application, "path": str(document),
+            "error_code": "document_open_failed", "error": str(exc),
+        }
+
+    process_names = APP_PROCESS_NAMES.get(application, [application])
+    expected = {document.name.casefold(), document.stem.casefold()}
+    observed_titles: list[str] = []
+    for _ in range(40):
+        try:
+            titles = _apple(
+                "on run argv\n"
+                "tell application \"System Events\"\n"
+                "repeat with appName in argv\n"
+                "if exists (first application process whose name is appName) then\n"
+                "tell first application process whose name is appName to return name of every window\n"
+                "end if\n"
+                "end repeat\n"
+                "end tell\nreturn \"\"\nend run",
+                *process_names,
+            )
+            observed_titles = [item.strip() for item in titles.split(",") if item.strip()]
+            if any(any(token in title.casefold() for token in expected) for title in observed_titles):
+                activation = open_application(application)
+                return {
+                    "ok": True, "application": application, "path": str(document),
+                    "document": document.name, "loaded": True,
+                    "frontmost": bool(activation.get("frontmost")), "window_titles": observed_titles,
+                }
+        except (OSError, subprocess.SubprocessError):
+            pass
+        time.sleep(0.25)
+    return {
+        "ok": False, "application": application, "path": str(document),
+        "document": document.name, "loaded": False, "window_titles": observed_titles,
+        "error_code": "document_not_visible", "retryable": True,
+        "error": f"{application} accepted the file, but a window for {document.name} was not verified. It may be waiting on a dialog.",
+    }
 
 
 def quit_application(name: str) -> dict:

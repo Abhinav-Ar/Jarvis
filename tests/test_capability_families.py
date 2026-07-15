@@ -1,10 +1,38 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import capability_families
 
 
 class CapabilityFamilyTests(unittest.TestCase):
+    def test_versioned_application_bundle_is_detected(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "OpenSCAD-2021.01.app").mkdir()
+            original_path = capability_families.Path
+
+            def routed_path(value):
+                if value == "/Applications":
+                    return root
+                return original_path(value)
+
+            with patch.object(capability_families, "Path", side_effect=routed_path):
+                self.assertTrue(capability_families._app("OpenSCAD"))
+
+    def test_nested_application_bundle_is_detected(self):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "DaVinci Resolve" / "DaVinci Resolve.app").mkdir(parents=True)
+            original_path = capability_families.Path
+
+            def routed_path(value):
+                return root if value == "/Applications" else original_path(value)
+
+            with patch.object(capability_families, "Path", side_effect=routed_path):
+                self.assertTrue(capability_families._app("DaVinci Resolve"))
+
     def test_registry_contains_all_broad_families(self):
         names = set(capability_families.families())
         self.assertEqual(names, {

@@ -5,6 +5,11 @@ import fast_commands
 
 
 class FastCommandTests(unittest.TestCase):
+    @patch("app_installer.status_summary", return_value="Blender is installed and verified.")
+    def test_installation_status_never_starts_another_install(self, status):
+        self.assertEqual(fast_commands.execute("Is a Blender installed yet?"), "Blender is installed and verified.")
+        status.assert_called_once_with("blender")
+
     @patch("activity.record_step")
     @patch("activity.update")
     @patch("activity.set_execution_path")

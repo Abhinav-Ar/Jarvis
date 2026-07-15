@@ -1,10 +1,24 @@
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 import mac_tools
 
 
 class MacToolTests(unittest.TestCase):
+    def test_creative_and_cad_aliases_are_canonical(self):
+        self.assertEqual(mac_tools.canonical_application_name("free cad"), "FreeCAD")
+        self.assertEqual(mac_tools.canonical_application_name("open scad"), "OpenSCAD")
+        self.assertEqual(mac_tools.canonical_application_name("da vinci"), "DaVinci Resolve")
+
+    @patch("mac_tools.application_bundle_path", return_value=Path("/Applications/DaVinci Resolve/DaVinci Resolve.app"))
+    @patch("mac_tools._apple", return_value="frontmost")
+    @patch("mac_tools.subprocess.run")
+    def test_registered_workspace_app_opens_by_explicit_bundle(self, run, apple, bundle):
+        result = mac_tools.open_application("da vinci")
+        self.assertTrue(result["frontmost"])
+        self.assertEqual(run.call_args_list[0].args[0], ["/usr/bin/open", "/Applications/DaVinci Resolve/DaVinci Resolve.app"])
     @patch("mac_tools._apple", return_value="frontmost")
     @patch("mac_tools.subprocess.run")
     def test_open_application_reports_foreground_state(self, run, apple):
@@ -14,6 +28,21 @@ class MacToolTests(unittest.TestCase):
         self.assertEqual(run.call_count, 2)
         self.assertEqual(run.call_args_list[0].args[0], ["/usr/bin/open", "-a", "Safari"])
         apple.assert_called_once()
+
+    @patch("mac_tools.open_application", return_value={"ok": True, "frontmost": True})
+    @patch("mac_tools.application_bundle_path", return_value=Path("/Applications/Blender.app"))
+    @patch("mac_tools._apple", return_value="Neon Desk.blend - Blender")
+    @patch("mac_tools.subprocess.run")
+    def test_open_file_verifies_exact_document_window(self, run, apple, bundle, activate):
+        with tempfile.TemporaryDirectory() as folder:
+            scene = Path(folder) / "Neon Desk.blend"
+            scene.write_bytes(b"BLENDER")
+            result = mac_tools.open_file_in_application(scene, "Blender")
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["loaded"])
+        self.assertEqual(result["document"], "Neon Desk.blend")
+        self.assertEqual(run.call_args.args[0], ["/usr/bin/open", "-a", "/Applications/Blender.app", str(scene.resolve())])
+        activate.assert_called_once_with("Blender")
 
     @patch("mac_tools.time.sleep")
     @patch("mac_tools._apple", side_effect=["0", "false", "frontmost"])

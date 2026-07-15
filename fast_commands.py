@@ -69,6 +69,15 @@ def execute(text: str) -> str | None:
             return (f"Safari is open on {host or address}." if combined_navigation else
                     f"{host or address} is open in Safari.")
 
+    installation_status = (
+        re.fullmatch(r"is (?:(?:a|the) )?(.+?) installed(?: yet)?", raw)
+        or re.fullmatch(r"has (?:(?:a|the) )?(.+?) finished installing", raw)
+        or re.fullmatch(r"(?:check |check whether )?(?:(?:a|the) )?(.+?) installation status", raw)
+    )
+    if installation_status:
+        import app_installer
+        return app_installer.status_summary(installation_status.group(1).strip())
+
     # Known multi-step workflows own their prerequisite, recovery, and
     # verification loops locally. GPT is only used if no deterministic workflow
     # recognizes the request.

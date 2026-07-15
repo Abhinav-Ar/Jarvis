@@ -268,3 +268,107 @@ final class JarvisHUDView: NSView {
         a.withAlphaComponent(0.13).setStroke(); scan.lineWidth = 1; scan.stroke()
     }
 }
+
+final class JarvisTaskCapsuleView: NSView {
+    var title = "BACKGROUND TASK"
+    var phaseLabel = "Working"
+    var detail = ""
+    var status = "running"
+    var step = 1
+    var totalSteps = 4
+    var started = Date().timeIntervalSince1970
+    var route = ""
+    private var phase: CGFloat = 0
+    private var timer: Timer?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private var accent: NSColor {
+        if status == "completed" { return NSColor(calibratedRed: 0.15, green: 1.0, blue: 0.55, alpha: 1) }
+        if status == "failed" { return .systemRed }
+        return NSColor(calibratedRed: 0.10, green: 0.78, blue: 1.0, alpha: 1)
+    }
+
+    @objc private func animate() {
+        phase += 0.055
+        needsDisplay = true
+    }
+
+    func setAnimating(_ enabled: Bool) {
+        if enabled, timer == nil {
+            timer = Timer.scheduledTimer(timeInterval: 1.0 / 24.0, target: self, selector: #selector(animate), userInfo: nil, repeats: true)
+        } else if !enabled {
+            timer?.invalidate()
+            timer = nil
+        }
+    }
+
+    private func font(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont {
+        NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+    }
+
+    private func drawText(_ value: String, at point: NSPoint, size: CGFloat, color: NSColor, weight: NSFont.Weight = .regular) {
+        NSString(string: value).draw(at: point, withAttributes: [.font: font(size, weight), .foregroundColor: color])
+    }
+
+    private func shortened(_ value: String, limit: Int) -> String {
+        value.count <= limit ? value : String(value.prefix(max(1, limit - 1))) + "…"
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let a = accent
+        let body = bounds.insetBy(dx: 2, dy: 2)
+        let shell = NSBezierPath(roundedRect: body, xRadius: 16, yRadius: 16)
+        NSColor(calibratedWhite: 0.025, alpha: 0.94).setFill(); shell.fill()
+        a.withAlphaComponent(0.82).setStroke(); shell.lineWidth = 1.4; shell.stroke()
+
+        let scanX = body.minX + ((sin(phase) + 1) / 2) * body.width
+        let scan = NSBezierPath()
+        scan.move(to: NSPoint(x: scanX, y: body.minY + 7))
+        scan.line(to: NSPoint(x: scanX, y: body.maxY - 7))
+        a.withAlphaComponent(0.08).setStroke(); scan.lineWidth = 12; scan.stroke()
+
+        let compact = bounds.width < 380
+        let core = NSPoint(x: compact ? 36 : 42, y: bounds.midY)
+        for index in 0..<3 {
+            let radius = CGFloat(9 + index * 6)
+            let ring = NSBezierPath()
+            ring.appendArc(withCenter: core, radius: radius, startAngle: phase * 90 + CGFloat(index * 37), endAngle: phase * 90 + CGFloat(index * 37 + 205))
+            a.withAlphaComponent(0.75 - CGFloat(index) * 0.18).setStroke()
+            ring.lineWidth = index == 0 ? 1.8 : 1.0
+            ring.stroke()
+        }
+        let dotRadius: CGFloat = status == "running" ? 3.5 + sin(phase * 2) : 4
+        let dot = NSBezierPath(ovalIn: NSRect(x: core.x - dotRadius, y: core.y - dotRadius, width: dotRadius * 2, height: dotRadius * 2))
+        a.setFill(); dot.fill()
+
+        let left = compact ? 68.0 : 78.0
+        let elapsed = max(0, Int(Date().timeIntervalSince1970 - started))
+        let elapsedText = String(format: "%02d:%02d", elapsed / 60, elapsed % 60)
+        drawText("ORION // BACKGROUND", at: NSPoint(x: left, y: bounds.maxY - 23), size: compact ? 8 : 9, color: a, weight: .bold)
+        drawText(elapsedText, at: NSPoint(x: bounds.maxX - (compact ? 49 : 57), y: bounds.maxY - 23), size: compact ? 8 : 9, color: .white.withAlphaComponent(0.58), weight: .medium)
+        drawText(shortened(title, limit: compact ? 24 : 29), at: NSPoint(x: left, y: bounds.maxY - (compact ? 43 : 47)), size: compact ? 11 : 12.5, color: .white, weight: .bold)
+        let phaseText = status == "completed" ? "✓ \(phaseLabel)" : status == "failed" ? "! \(phaseLabel)" : "› \(phaseLabel)"
+        drawText(shortened(phaseText, limit: compact ? 39 : 48), at: NSPoint(x: left, y: bounds.maxY - (compact ? 59 : 67)), size: compact ? 8.2 : 9.3, color: a, weight: .medium)
+
+        let segments = max(1, totalSteps)
+        let barX = left
+        let barY: CGFloat = compact ? 13 : 15
+        let gap: CGFloat = 4
+        let barWidth = bounds.maxX - barX - 15
+        let width = (barWidth - CGFloat(segments - 1) * gap) / CGFloat(segments)
+        for index in 0..<segments {
+            let rect = NSRect(x: barX + CGFloat(index) * (width + gap), y: barY, width: width, height: compact ? 3 : 4)
+            let path = NSBezierPath(roundedRect: rect, xRadius: 2, yRadius: 2)
+            let active = index < step
+            (active ? a.withAlphaComponent(index == step - 1 && status == "running" ? 0.55 + 0.35 * abs(sin(phase)) : 0.85) : NSColor.white.withAlphaComponent(0.12)).setFill()
+            path.fill()
+        }
+    }
+}

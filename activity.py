@@ -21,6 +21,8 @@ STATE_FILE = RUNTIME / "activity.json"
 CHAT_FILE = RUNTIME / "chat.json"
 ACTION_FILE = RUNTIME / "actions.json"
 PLAN_FILE = RUNTIME / "ui-plan.json"
+BACKGROUND_TASK_FILE = RUNTIME / "background-task.json"
+SESSION_UI_FILE = RUNTIME / "session-ui-active"
 _lock = threading.Lock()
 _announcement_lock = threading.Lock()
 _last_announcements: dict[str, float] = {}
@@ -47,6 +49,23 @@ def reset_ui() -> None:
         PLAN_FILE.write_text("{}", encoding="utf-8")
         (RUNTIME / "active-task.json").unlink(missing_ok=True)
         (RUNTIME / "hud-preview").unlink(missing_ok=True)
+        SESSION_UI_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def begin_session_ui() -> None:
+    """Open the conversational HUD only after an actionable request exists."""
+    try:
+        RUNTIME.mkdir(parents=True, exist_ok=True)
+        SESSION_UI_FILE.touch()
+    except OSError:
+        pass
+
+
+def end_session_ui() -> None:
+    try:
+        SESSION_UI_FILE.unlink(missing_ok=True)
     except OSError:
         pass
 
@@ -75,6 +94,47 @@ def set_execution_path(goal: str, steps: list[str]) -> None:
         pass
 
 
+def update_background_task(
+    task_id: str,
+    title: str,
+    phase: str,
+    *,
+    status: str = "running",
+    step: int = 1,
+    total_steps: int = 4,
+    detail: str = "",
+    route: str = "",
+) -> None:
+    """Publish a truthful, compact status for work that outlives a voice turn."""
+    try:
+        RUNTIME.mkdir(parents=True, exist_ok=True)
+        previous: dict = {}
+        if BACKGROUND_TASK_FILE.exists():
+            try:
+                previous = json.loads(BACKGROUND_TASK_FILE.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                previous = {}
+        now = time.time()
+        started = previous.get("started", now) if previous.get("id") == task_id else now
+        payload = {
+            "id": task_id,
+            "title": title,
+            "phase": phase,
+            "status": status,
+            "step": max(1, min(int(step), max(1, int(total_steps)))),
+            "total_steps": max(1, int(total_steps)),
+            "detail": detail,
+            "route": route,
+            "started": started,
+            "updated": now,
+        }
+        temporary = BACKGROUND_TASK_FILE.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload), encoding="utf-8")
+        temporary.replace(BACKGROUND_TASK_FILE)
+    except (OSError, TypeError, ValueError):
+        pass
+
+
 def describe_tool(name: str, arguments: dict) -> tuple[str, str]:
     labels = {
         "open_application": "OPEN APPLICATION", "quit_application": "CLOSE APPLICATION", "browser_navigate": "NAVIGATE BROWSER",
@@ -86,6 +146,12 @@ def describe_tool(name: str, arguments: dict) -> tuple[str, str]:
         "open_search": "SEARCH WEB", "create_reminder": "CREATE REMINDER",
         "create_note": "CREATE NOTE", "create_calendar_event": "CREATE EVENT",
         "todoist_create_task": "CREATE TODOIST TASK", "system_status": "READ SYSTEM",
+        "blender_create_project": "GENERATE BLENDER PROJECT",
+        "blender_refine_project": "REFINE BLENDER PROJECT",
+        "native_project_open": "LOAD NATIVE PROJECT",
+        "freecad_create_project": "GENERATE FREECAD PROJECT",
+        "openscad_create_project": "COMPILE OPENSCAD PROJECT",
+        "resolve_create_project": "BUILD RESOLVE PROJECT",
     }
     label = labels.get(name, name.replace("_", " ").upper())
     if name == "open_application":
@@ -101,6 +167,10 @@ def describe_tool(name: str, arguments: dict) -> tuple[str, str]:
         target = ", ".join(arguments.get("applications", [])) or "application windows"
     elif name.startswith("spotify_"):
         target = str(arguments.get("name") or arguments.get("query") or arguments.get("action") or "Spotify")
+    elif name in {"blender_create_project", "blender_refine_project", "freecad_create_project", "openscad_create_project", "resolve_create_project"}:
+        target = str(arguments.get("project_name") or "native project")
+    elif name == "native_project_open":
+        target = f"{arguments.get('project_name') or 'latest project'} in {arguments.get('application') or 'native app'}"
     elif name == "get_weather":
         target = str(arguments.get("location", "current location"))
     else:

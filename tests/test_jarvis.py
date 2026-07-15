@@ -23,6 +23,8 @@ class RequestActivationTests(unittest.TestCase):
     def test_baymax_style_satisfaction_ends_session(self):
         self.assertTrue(is_satisfied_command("That'll be all."))
         self.assertTrue(is_satisfied_command("That's all"))
+        self.assertTrue(is_satisfied_command("We're done"))
+        self.assertTrue(is_satisfied_command("Thanks, close this session"))
         self.assertFalse(is_satisfied_command("I'm satisfied with my care."))
         self.assertTrue(is_authorized_session_close("Hey Jarvis, that'll be all", "jarvis"))
         self.assertFalse(is_authorized_session_close("that'll be all", "jarvis"))

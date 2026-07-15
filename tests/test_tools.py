@@ -44,6 +44,8 @@ class ToolTests(unittest.TestCase):
                 "codex_generate", "generation_status", "generation_cancel",
                 "capability_families_status", "objective_compile", "google_drive_search",
                 "google_create_spreadsheet", "google_create_document", "google_create_presentation",
+                "blender_create_project", "blender_refine_project", "freecad_create_project",
+                "openscad_create_project", "resolve_create_project", "native_project_open",
                 "install_application", "installation_status",
             }
         self.assertEqual(function_names, handler_names)
@@ -57,6 +59,21 @@ class ToolTests(unittest.TestCase):
     def test_general_conversation_sends_no_tools(self):
         self.assertEqual(tools.select_definitions("Tell me a short joke"), [])
 
+    def test_native_project_request_selects_dedicated_worker(self):
+        names = {definition["name"] for definition in tools.select_definitions("Create a parametric enclosure in FreeCAD")}
+        self.assertIn("freecad_create_project", names)
+        self.assertIn("openscad_create_project", names)
+
+    def test_open_native_project_selects_exact_project_loader(self):
+        names = {definition["name"] for definition in tools.select_definitions("Open my Neon Desk Blender project")}
+        self.assertIn("native_project_open", names)
+
+    def test_blender_followup_context_selects_refinement_worker(self):
+        names = {definition["name"] for definition in tools.select_definitions(
+            "Add a cyan strip around that desk. Active native project: Blender NeonDust32"
+        )}
+        self.assertIn("blender_refine_project", names)
+
     def test_install_request_selects_native_installer(self):
         names = {definition["name"] for definition in tools.select_definitions("Install Blender on my laptop")}
         self.assertIn("install_application", names)
@@ -65,6 +82,16 @@ class ToolTests(unittest.TestCase):
     def test_read_only_tool_is_not_action_evidence(self):
         self.assertFalse(tools.is_action_evidence("find_files", {}, {"ok": True, "files": ["x"]}))
         self.assertTrue(tools.is_action_evidence("install_application", {}, {"ok": True, "status": "running"}))
+
+    @patch("tools.app_installer.install", return_value={"ok": True, "status": "running"})
+    def test_installer_receives_request_and_task_correlation(self, install):
+        tools.execute(
+            "install_application", {"application": "Blender", "confirmed": True},
+            context={"request_id": "request-1", "task_id": "task-1"},
+        )
+        install.assert_called_once_with(
+            application="Blender", confirmed=True, _request_id="request-1", _task_id="task-1",
+        )
 
     @patch.dict("os.environ", {}, clear=True)
     def test_optional_integrations_fail_cleanly_without_secrets(self):

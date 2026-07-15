@@ -67,8 +67,15 @@ def is_logoff_command(text: str) -> bool:
 
 def is_satisfied_command(text: str) -> bool:
     normalized = " ".join(re.sub(r"[^a-z0-9' ]", " ", text.lower()).split())
-    normalized = normalized.replace("that'll", "that will").replace("that's", "that is")
-    return normalized in {"that will be all", "that is all"}
+    normalized = normalized.replace("that'll", "that will").replace("that's", "that is").replace("we're", "we are")
+    for prefix in ("okay ", "ok ", "please ", "thanks ", "thank you "):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix):]
+    return normalized in {
+        "that will be all", "that is all", "that is everything",
+        "we are done", "we are all set", "done for now", "all set for now",
+        "end this session", "close this session",
+    }
 
 
 def strip_wake_word(text: str, hotword: str) -> str:
@@ -139,7 +146,7 @@ def main() -> int:
     assistant = OrionAssistant()
     recorder = None
     if not args.text:
-        from audio import PhraseRecorder
+        from audio import PhraseRecorder, push_to_talk_enabled
         recorder = PhraseRecorder()
 
     hotword = os.getenv("ORION_HOTWORD", "orion").lower()
@@ -162,8 +169,9 @@ def main() -> int:
                     audio_path = pending_audio_path
                     pending_audio_path = None
                 else:
-                    print(f"Listening for ‘{hotword}’…")
-                    activity.update("session" if session_active else "listening", "Ready" if session_active else "Listening")
+                    ptt_mode = push_to_talk_enabled()
+                    print("Hold Right Option to speak…" if ptt_mode else f"Listening for ‘{hotword}’…")
+                    activity.update("session" if session_active else "listening", "Hold Right Option" if ptt_mode else ("Ready" if session_active else "Listening"))
                     audio_path = recorder.listen(on_speech_start=lambda: diagnostics.event("speech_started"))
                 try:
                     print("Transcribing…", flush=True)
@@ -181,11 +189,11 @@ def main() -> int:
 
             if not text:
                 continue
-            termination = session_active and is_satisfied_command(text)
+            ptt_activation = not args.text and push_to_talk_enabled()
             if not request_is_active(
                 text,
                 text_mode=args.text,
-                no_hotword=args.no_hotword,
+                no_hotword=args.no_hotword or ptt_activation,
                 follow_up=session_active,
                 hotword=hotword,
             ):
@@ -196,20 +204,11 @@ def main() -> int:
             wake_detected = has_wake_phrase(text, hotword)
             request_id = uuid.uuid4().hex[:12]
             if wake_detected:
-                if not session_active:
-                    assistant.reset_session()
-                session_active = True
-                activity.cue("heard")
-                activity.update("transcribing", "Wake confirmed", "ORION heard the activation phrase")
                 text = strip_wake_word(text, hotword)
-                diagnostics.event("wake_phrase_confirmed", request_id=request_id, request=text[:500])
-            if not text:
-                activity.append_chat("assistant", "How can I help?")
-                assistant.speak("How can I help?")
-                activity.update("session", "Ready", "Listening for your request")
-                continue
+            lifecycle_authorized = args.text or args.no_hotword or ptt_activation or wake_detected
 
-            if is_logoff_command(text) and wake_detected:
+            if is_logoff_command(text) and lifecycle_authorized:
+                activity.end_session_ui()
                 restore_workspace()
                 activity.update("stopped", "Stopped")
                 stop_desktop_control()
@@ -218,33 +217,36 @@ def main() -> int:
                 assistant.speak("Logging off.")
                 break
 
-            if is_logoff_command(text) and not wake_detected:
-                message = "For a complete shutdown, say: Hey ORION, log off."
-                activity.append_chat("user", text)
-                activity.append_chat("assistant", message)
-                assistant.speak(message)
-                activity.update("session", "Your turn", "Conversation active")
-                continue
-
-            if is_satisfied_command(text) and wake_detected:
+            if is_satisfied_command(text) and lifecycle_authorized and session_active:
                 activity.append_chat("user", text)
                 activity.append_chat("assistant", "I’m glad I could help.")
+                activity.end_session_ui()
                 assistant.speak("I’m glad I could help.")
                 restore_workspace()
                 assistant.reset_session()
                 session_active = False
-                activity.update("listening", "Listening")
+                activity.update("listening", "Hold Right Option" if ptt_activation else "Listening")
                 activity.cue("complete")
                 continue
 
-            if is_satisfied_command(text) and not wake_detected:
-                message = "To close this session, say: Hey ORION, that’ll be all."
-                activity.append_chat("user", text)
-                activity.append_chat("assistant", message)
-                assistant.speak(message)
-                activity.update("session", "Your turn", "Conversation active")
+            if (is_logoff_command(text) or is_satisfied_command(text)) and not lifecycle_authorized:
+                diagnostics.event("lifecycle_command_rejected", request_id=request_id, request=text[:120])
                 continue
 
+            if not text:
+                continue
+
+            if ptt_activation or wake_detected or args.text or args.no_hotword:
+                if not session_active:
+                    assistant.reset_session()
+                session_active = True
+                activity.cue("heard")
+                diagnostics.event(
+                    "request_activation_confirmed", request_id=request_id,
+                    method="push_to_talk" if ptt_activation else "wake_phrase",
+                )
+
+            activity.begin_session_ui()
             activity.append_chat("user", text)
 
             kernel_turn = operating_kernel.before_request(text, request_id, session_id)

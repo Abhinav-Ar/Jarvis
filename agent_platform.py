@@ -365,6 +365,9 @@ class AgentPlatform:
         if tool in {
             "create_email_draft", "git_commit", "git_commit_and_push", "git_push",
             "desktop_action", "desktop_accessibility_set", "desktop_accessibility_press",
+            "install_application",
+            "blender_create_project", "freecad_create_project",
+            "openscad_create_project", "resolve_create_project",
         }:
             return "consequential"
         if tool in {"desktop_window_arrange", "desktop_window_restore"}:

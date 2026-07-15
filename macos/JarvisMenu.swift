@@ -17,19 +17,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private lazy var chatFile = appDirectory.appendingPathComponent(".runtime/chat.json")
     private lazy var actionsFile = appDirectory.appendingPathComponent(".runtime/actions.json")
     private lazy var uiPlanFile = appDirectory.appendingPathComponent(".runtime/ui-plan.json")
+    private lazy var backgroundTaskFile = appDirectory.appendingPathComponent(".runtime/background-task.json")
+    private lazy var sessionUIFile = appDirectory.appendingPathComponent(".runtime/session-ui-active")
     private lazy var contrastFile = appDirectory.appendingPathComponent(".runtime/contrast-state.json")
     private lazy var platformFile = appDirectory.appendingPathComponent(".runtime/platform-status.json")
     private lazy var cloudLimitDisabledFlag = appDirectory.appendingPathComponent(".runtime/cloud-limit-disabled")
+    private lazy var inputModeFile = appDirectory.appendingPathComponent(".runtime/input-mode")
+    private lazy var pushToTalkTrigger = appDirectory.appendingPathComponent(".runtime/push-to-talk-active")
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
     private var detailMenuItem: NSMenuItem!
     private var desktopControlItem: NSMenuItem!
     private var platformMenuItem: NSMenuItem!
     private var cloudMenuItem: NSMenuItem!
+    private var inputModeItem: NSMenuItem!
+    private var pushToTalkMonitor: Any?
     private var timer: Timer?
     private var interactionTimer: Timer?
     private var hud: NSWindow?
     private var hudView: JarvisHUDView?
+    private var taskHUD: NSWindow?
+    private var taskHUDView: JarvisTaskCapsuleView?
     private var previousState = ""
     private var lastLuminanceCheck = Date.distantPast
     private var sampledLuminance: CGFloat = 0.25
@@ -59,6 +67,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         menu.addItem(cloudMenuItem)
         desktopControlItem = NSMenuItem(title: "Enable Desktop Control", action: #selector(toggleDesktopControl), keyEquivalent: "d")
         menu.addItem(desktopControlItem)
+        inputModeItem = NSMenuItem(title: "Input Mode: Push to Talk", action: #selector(toggleInputMode), keyEquivalent: "")
+        menu.addItem(inputModeItem)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Start ORION", action: #selector(startJarvis), keyEquivalent: "s"))
         menu.addItem(NSMenuItem(title: "Stop ORION", action: #selector(stopJarvis), keyEquivalent: "x"))
@@ -73,6 +83,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         menu.addItem(NSMenuItem(title: "Accessibility Permission…", action: #selector(openAccessibilityPermission), keyEquivalent: ""))
         for item in menu.items { item.target = self }
         statusItem.menu = menu
+
+        if !FileManager.default.fileExists(atPath: inputModeFile.path) {
+            try? "push_to_talk".write(to: inputModeFile, atomically: true, encoding: .utf8)
+        }
+        pushToTalkMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.handlePushToTalk(event)
+        }
 
         refreshStatus()
         timer = Timer.scheduledTimer(timeInterval: 0.5, target: self, selector: #selector(refreshStatus), userInfo: nil, repeats: true)
@@ -275,7 +292,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         desktopControlItem.title = desktopEnabled
             ? "Disable Desktop Control (Emergency Stop)"
             : "Enable Desktop Control"
+        let pushToTalk = (try? String(contentsOf: inputModeFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) != "always_listening"
+        inputModeItem.title = pushToTalk ? "Input Mode: Push to Talk • Hold Right Option" : "Input Mode: Always Listening"
+        inputModeItem.state = pushToTalk ? .on : .off
         updateHUD(state: state, label: label, detail: detail)
+        updateBackgroundTaskHUD()
         if state == "listening" && ["working", "verifying", "speaking"].contains(previousState) {
             let content = UNMutableNotificationContent()
             content.title = "ORION finished"
@@ -289,7 +310,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     }
 
     private func updateHUD(state: String, label: String, detail: String) {
-        let visible = ["session", "transcribing", "planning", "working", "verifying", "speaking", "needs_input", "error"].contains(state)
+        let visible = FileManager.default.fileExists(atPath: sessionUIFile.path)
+            && ["session", "transcribing", "planning", "working", "verifying", "speaking", "needs_input", "error"].contains(state)
         if !visible {
             hudView?.setAnimating(false)
             hud?.orderOut(nil)
@@ -374,6 +396,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         updateHUDInteraction()
     }
 
+    private func updateBackgroundTaskHUD() {
+        guard let data = try? Data(contentsOf: backgroundTaskFile),
+              let task = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            taskHUDView?.setAnimating(false)
+            taskHUD?.orderOut(nil)
+            return
+        }
+        let status = task["status"] as? String ?? "running"
+        let updated = task["updated"] as? Double ?? 0
+        let terminal = ["completed", "failed"].contains(status)
+        guard !terminal || Date().timeIntervalSince1970 - updated < 9 else {
+            taskHUDView?.setAnimating(false)
+            taskHUD?.orderOut(nil)
+            return
+        }
+        let screen = targetScreen()
+        let compact = screen.visibleFrame.width < 1500
+        let size = NSSize(width: compact ? 338 : 414, height: compact ? 92 : 104)
+        let margin: CGFloat = compact ? 12 : 18
+        let frame = NSRect(
+            x: screen.visibleFrame.maxX - size.width - margin,
+            y: screen.visibleFrame.maxY - size.height - margin,
+            width: size.width,
+            height: size.height
+        )
+        if taskHUD == nil {
+            let panel = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.level = .floating
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            panel.hasShadow = true
+            panel.ignoresMouseEvents = true
+            panel.hidesOnDeactivate = false
+            panel.isReleasedWhenClosed = false
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            let view = JarvisTaskCapsuleView(frame: NSRect(origin: .zero, size: size))
+            view.autoresizingMask = [.width, .height]
+            panel.contentView = view
+            taskHUD = panel
+            taskHUDView = view
+        }
+        taskHUDView?.title = task["title"] as? String ?? "BACKGROUND TASK"
+        taskHUDView?.phaseLabel = task["phase"] as? String ?? "Working"
+        taskHUDView?.detail = task["detail"] as? String ?? ""
+        taskHUDView?.status = status
+        taskHUDView?.step = task["step"] as? Int ?? 1
+        taskHUDView?.totalSteps = task["total_steps"] as? Int ?? 4
+        taskHUDView?.started = task["started"] as? Double ?? Date().timeIntervalSince1970
+        taskHUDView?.route = task["route"] as? String ?? ""
+        taskHUDView?.setAnimating(!terminal)
+        taskHUDView?.needsDisplay = true
+        taskHUD?.setFrame(frame, display: true)
+        taskHUDView?.frame = NSRect(origin: .zero, size: size)
+        taskHUD?.orderFrontRegardless()
+    }
+
     @objc private func updateHUDInteraction() {
         guard let panel = hud, panel.isVisible, let view = hudView else {
             hud?.ignoresMouseEvents = true
@@ -433,6 +511,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             try? FileManager.default.createDirectory(at: cloudLimitDisabledFlag.deletingLastPathComponent(), withIntermediateDirectories: true)
             FileManager.default.createFile(atPath: cloudLimitDisabledFlag.path, contents: Data())
         }
+        refreshStatus()
+    }
+
+    private func handlePushToTalk(_ event: NSEvent) {
+        guard event.keyCode == 61,
+              (try? String(contentsOf: inputModeFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) != "always_listening" else { return }
+        if event.modifierFlags.contains(.option) {
+            FileManager.default.createFile(atPath: pushToTalkTrigger.path, contents: Data())
+        } else {
+            try? FileManager.default.removeItem(at: pushToTalkTrigger)
+        }
+    }
+
+    @objc private func toggleInputMode() {
+        let current = (try? String(contentsOf: inputModeFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)) ?? "push_to_talk"
+        try? (current == "always_listening" ? "push_to_talk" : "always_listening").write(to: inputModeFile, atomically: true, encoding: .utf8)
+        try? FileManager.default.removeItem(at: pushToTalkTrigger)
         refreshStatus()
     }
 

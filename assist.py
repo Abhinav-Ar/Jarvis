@@ -39,6 +39,8 @@ Apple apps, Spotify, Todoist, or Home Assistant. Only perform actions that the
 user explicitly requested; never infer a side effect from casual conversation.
 An explicit request to install an application authorizes install_application with
 confirmed true. Use the trusted installer instead of merely opening a download page.
+Questions asking whether an application is installed must use installation_status
+and must never call install_application or start a second job.
 Never promise a future action unless a tool result proves that a background job
 actually started. Never report an action complete without successful tool evidence.
 Treat the user's request as an objective, not a request to choose or describe
@@ -94,6 +96,24 @@ the complete Drive artifact in one operation; the user does not need to specify
 tabs, formulas, validation, formatting, or charts. Never claim creation when Google
 authorization is unavailable, and never replace the requested Drive artifact with
 a local file unless the user agrees.
+Native creative and engineering requests must use their dedicated worker whenever
+the user explicitly asks to create a project or artifact: blender_create_project
+for editable scenes and renders, freecad_create_project for editable parametric
+parts plus STEP/STL, openscad_create_project for self-contained source plus STL,
+and resolve_create_project for Resolve projects, media pools, and timelines. Infer
+reasonable project defaults from the objective instead of asking the user to design
+the internal scene graph. Do not claim deep project creation from merely opening or
+clicking the application. Never overwrite an existing Resolve project or import
+media outside the user's home folder.
+Treat colored neon/RGB/accent lighting as a physical fixture or emissive strip by
+default, with neutral general illumination. Never represent a requested light as
+an arbitrary floating sphere or color-wash every material. For a follow-up change
+to the active Blender project, use blender_refine_project rather than desktop clicks,
+Home Assistant, or rebuilding the project from scratch.
+When the user asks to open, show, or load a native project, use native_project_open.
+Opening the application, finding the file on disk, or seeing an untitled window is
+not proof that the requested project is loaded. Completion requires the exact
+editable artifact to be opened and verified in the native application's window.
 Use screen inspection and desktop actions only as a fallback when no semantic tool
 can do the job. Text the user explicitly asked you to type is confirmed, but typing
 does not authorize submitting it. If an app fails to become frontmost, retry using
@@ -143,6 +163,7 @@ class OrionAssistant:
         self.previous_response_id: str | None = None
         self.last_selected_tools: list[dict] = []
         self.local_session_turns: list[dict[str, str]] = []
+        self.active_native_project: dict[str, str] = {}
         self.task_engine = TaskEngine()
         self.platform = platform()
 
@@ -159,6 +180,7 @@ class OrionAssistant:
         self.previous_response_id = None
         self.last_selected_tools = []
         self.local_session_turns = []
+        self.active_native_project = {}
         self.task_engine.reset()
         try:
             import execution_engine
@@ -170,8 +192,11 @@ class OrionAssistant:
         """Retain locally answered turns that are absent from the cloud thread."""
         if not local:
             return
-        self.local_session_turns.append({"user": user[:800], "assistant": assistant[:1200]})
-        self.local_session_turns = self.local_session_turns[-6:]
+        user_limit = int(os.getenv("ORION_SESSION_USER_CHARS", "1800"))
+        assistant_limit = int(os.getenv("ORION_SESSION_ASSISTANT_CHARS", "2600"))
+        turn_limit = max(6, min(int(os.getenv("ORION_SESSION_CONTEXT_TURNS", "12")), 24))
+        self.local_session_turns.append({"user": user[:user_limit], "assistant": assistant[:assistant_limit]})
+        self.local_session_turns = self.local_session_turns[-turn_limit:]
 
     def ask(self, question: str, request_id: str = "") -> str:
         activity.update("planning", "Planning…")
@@ -206,10 +231,14 @@ class OrionAssistant:
         }
         referential = continuation or any(marker in normalized_followup for marker in (
             "did you check", "didnt work", "wasnt", "still pending", "changes pending", "literally see",
+            "that ", " it ", "instead", "retry", "try again", "add ", "change ", "modify ",
+            "update ", "remove ", "make the", "make it", "the desk", "the project",
         ))
         selection_request = request_text
         if referential and self.local_session_turns:
-            selection_request += "\nRecent local turn: " + json.dumps(self.local_session_turns[-1])
+            selection_request += "\nRecent local turns: " + json.dumps(self.local_session_turns[-3:])
+        if referential and self.active_native_project:
+            selection_request += "\nActive native project: " + json.dumps(self.active_native_project)
         selected_tools = tools.select_definitions(selection_request)
         if not selected_tools and continuation and self.last_selected_tools:
             selected_tools = self.last_selected_tools
@@ -232,11 +261,14 @@ class OrionAssistant:
         if any(local_context.values()):
             context_suffix = "\n\nRelevant user-authorized local context:\n" + json.dumps(local_context)
         if self.local_session_turns:
+            turn_limit = max(4, min(int(os.getenv("ORION_SESSION_CONTEXT_TURNS", "12")), 24))
             context_suffix += (
                 "\n\nRecent turns completed locally in this same active conversation "
                 "(resolve references and follow-ups against these):\n"
-                + json.dumps(self.local_session_turns[-4:])
+                + json.dumps(self.local_session_turns[-turn_limit:])
             )
+        if self.active_native_project:
+            context_suffix += "\n\nActive native project in this session:\n" + json.dumps(self.active_native_project)
         planned_input = (question + context_suffix) if not complex_task else (
             f"User request:\n{question}\n\nStructured task plan:\n{self.task_engine.context()}\n"
             "Execute the entire plan now. Do not merely describe it." + context_suffix
@@ -332,7 +364,13 @@ class OrionAssistant:
                         label=tool_label, target=tool_target,
                     )
                     tool_started = time.perf_counter()
-                    result = tools.execute(call.name, arguments)
+                    result = tools.execute(
+                        call.name, arguments,
+                        context={
+                            "request_id": request_id,
+                            "task_id": self.task_engine.record.task_id if self.task_engine.record else "",
+                        },
+                    )
                 except Exception as exc:  # Tool failures should not stop conversation.
                     result = {"ok": False, "error": str(exc)}
                     tool_started = locals().get("tool_started", time.perf_counter())
@@ -345,6 +383,15 @@ class OrionAssistant:
                 )
                 self.task_engine.record_tool(call.name, result)
                 completed_calls.append((call.name, arguments if 'arguments' in locals() else {}, result))
+                if result.get("ok") and call.name in {
+                    "blender_create_project", "blender_refine_project", "freecad_create_project",
+                    "openscad_create_project", "resolve_create_project", "native_project_open",
+                }:
+                    self.active_native_project = {
+                        "application": str(result.get("application") or arguments.get("application") or ""),
+                        "project": str(result.get("project") or arguments.get("project_name") or ""),
+                        "folder": str(result.get("folder") or ""),
+                    }
                 return {
                     "type": "function_call_output",
                     "call_id": call.call_id,
@@ -362,6 +409,20 @@ class OrionAssistant:
                 outputs = [run_call(call) for call in calls]
             if any(tools.is_action_evidence(name, arguments, result) for name, arguments, result in completed_calls):
                 action_effect_evidence = True
+
+            installation = next(
+                ((name, arguments, result) for name, arguments, result in completed_calls
+                 if name == "install_application" and result.get("ok") and result.get("status") == "running"),
+                None,
+            )
+            if installation:
+                answer = tools.result_summary(*installation)
+                self.task_engine.finish("delegated")
+                diagnostics.event(
+                    "installation_delegated", request_id=request_id,
+                    job_id=installation[2].get("job_id", ""), application=installation[2].get("application", ""),
+                )
+                return answer
 
             opened_apps = list(dict.fromkeys(
                 str(result.get("application") or arguments.get("name") or "").strip()
@@ -387,6 +448,8 @@ class OrionAssistant:
                 "quit_application", "browser_navigate", "set_system_volume", "show_notification",
                 "spotify_control", "spotify_play_playlist", "create_reminder", "create_note",
                 "install_application", "installation_status",
+                "blender_create_project", "freecad_create_project", "openscad_create_project",
+                "blender_refine_project", "resolve_create_project", "native_project_open",
             }
             if re.match(r"^\s*(?:open|launch|start)\b", request_text, re.IGNORECASE):
                 locally_final_tools.add("open_application")
@@ -398,6 +461,7 @@ class OrionAssistant:
                 summaries = [tools.result_summary(name, arguments, result) for name, arguments, result in completed_calls]
                 if all(summaries):
                     answer = " ".join(dict.fromkeys(summaries))
+                    self.record_turn(request_text, answer, local=True)
                     self.task_engine.finish("finished")
                     diagnostics.event(
                         "local_tool_confirmation", request_id=request_id,
@@ -574,10 +638,10 @@ class OrionAssistant:
         interruption_audio = None
         monitor_context = None
         if allow_barge_in:
-            from audio import BargeInMonitor
+            from audio import BargeInMonitor, PushToTalkMonitor, push_to_talk_enabled
 
             try:
-                monitor_context = BargeInMonitor()
+                monitor_context = PushToTalkMonitor() if push_to_talk_enabled() else BargeInMonitor()
                 monitor = monitor_context.__enter__()
             except Exception as exc:
                 monitor_context = None
@@ -616,6 +680,8 @@ class OrionAssistant:
                             if complete:
                                 if not first_audio_delay:
                                     first_audio_delay = time.perf_counter() - request_started
+                                    if monitor is not None:
+                                        monitor.begin_playback()
                                 underflows += int(bool(output.write(pending[:complete])))
                                 pending = pending[complete:]
                                 started_output = True
@@ -653,8 +719,8 @@ class OrionAssistant:
         monitor = None
         if allow_barge_in:
             try:
-                from audio import BargeInMonitor
-                monitor_context = BargeInMonitor()
+                from audio import BargeInMonitor, PushToTalkMonitor, push_to_talk_enabled
+                monitor_context = PushToTalkMonitor() if push_to_talk_enabled() else BargeInMonitor()
                 monitor = monitor_context.__enter__()
             except Exception as exc:
                 diagnostics.event("barge_in_unavailable", level="warning", error=str(exc))
@@ -663,6 +729,8 @@ class OrionAssistant:
         if voice:
             command += ["-v", voice]
         command.append(text)
+        if monitor is not None:
+            monitor.begin_playback()
         process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         interrupted = False
         interruption_audio = None

@@ -18,7 +18,7 @@ mkdir -p "$APP_DIR/.runtime" "$HOME/Library/LaunchAgents" "$HOME/Applications"
 
 # LaunchAgents cannot reliably read projects under macOS-protected Documents.
 # Deploy a minimal private runtime under Application Support instead.
-for file in orion.py orion_kernel.py orion_replay.py generation.py capability_families.py google_workspace.py app_installer.py jarvis.py assist.py audio.py activity.py diagnostics.py fast_commands.py tools.py spot.py mac_tools.py integrations.py desktop.py git_tools.py task_engine.py agent_platform.py project_workflow.py execution_engine.py recovery.py requirements.txt start.sh; do
+for file in orion.py orion_kernel.py orion_replay.py generation.py capability_families.py google_workspace.py app_installer.py project_workspace.py blender_worker.py freecad_worker.py openscad_worker.py resolve_worker.py jarvis.py assist.py audio.py activity.py diagnostics.py fast_commands.py tools.py spot.py mac_tools.py integrations.py desktop.py git_tools.py task_engine.py agent_platform.py project_workflow.py execution_engine.py recovery.py requirements.txt start.sh; do
   /usr/bin/ditto "$PROJECT_DIR/$file" "$APP_DIR/$file"
 done
 /usr/bin/ditto "$PROJECT_DIR/.env" "$APP_DIR/.env"

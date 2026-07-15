@@ -19,6 +19,20 @@ def _setting(name: str, default: str = "") -> str:
     return os.getenv(f"ORION_{name}", os.getenv(f"JARVIS_{name}", default))
 
 
+RUNTIME = Path(_setting("RUNTIME_DIR", str(Path.home() / "Library/Application Support/Jarvis/.runtime")))
+INPUT_MODE_FILE = RUNTIME / "input-mode"
+PUSH_TO_TALK_TRIGGER = RUNTIME / "push-to-talk-active"
+
+
+def push_to_talk_enabled() -> bool:
+    try:
+        if INPUT_MODE_FILE.exists():
+            return INPUT_MODE_FILE.read_text(encoding="utf-8").strip() != "always_listening"
+    except OSError:
+        pass
+    return _setting("PUSH_TO_TALK", "1") == "1"
+
+
 class PhraseRecorder:
     def __init__(self) -> None:
         self.rate = int(_setting("SAMPLE_RATE", "16000"))
@@ -35,6 +49,8 @@ class PhraseRecorder:
         return str(sd.query_devices())
 
     def listen(self, on_speech_start=None) -> Path:
+        if push_to_talk_enabled():
+            return self._listen_push_to_talk(on_speech_start)
         chunks: queue.Queue[bytes] = queue.Queue()
 
         def callback(indata, frames, time_info, status):
@@ -79,6 +95,34 @@ class PhraseRecorder:
             wav.writeframes(b"".join(recorded))
         return path
 
+    def _listen_push_to_talk(self, on_speech_start=None) -> Path:
+        """Keep the microphone closed until the user holds the PTT key."""
+        while not PUSH_TO_TALK_TRIGGER.exists():
+            time.sleep(0.02)
+        recorded: list[bytes] = []
+
+        def callback(indata, frames, time_info, status):
+            recorded.append(bytes(indata))
+
+        if on_speech_start is not None:
+            on_speech_start()
+        with sd.RawInputStream(
+            samplerate=self.rate, blocksize=self.blocksize, device=self.device,
+            channels=1, dtype="int16", callback=callback,
+        ):
+            while PUSH_TO_TALK_TRIGGER.exists() or len(recorded) < 5:
+                time.sleep(0.01)
+        return self._write_audio(recorded, "orion-push-to-talk.wav")
+
+    def _write_audio(self, recorded: list[bytes], filename: str) -> Path:
+        path = Path(tempfile.gettempdir()) / filename
+        with wave.open(str(path), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(self.rate)
+            wav.writeframes(b"".join(recorded))
+        return path
+
 
 class BargeInMonitor:
     """Detect sustained nearby speech while Jarvis is playing audio."""
@@ -107,6 +151,14 @@ class BargeInMonitor:
         self.device = int(device) if device and device.isdigit() else device or None
         self._stream = None
 
+    def begin_playback(self) -> None:
+        """Start echo calibration when speaker audio actually begins, not at stream setup."""
+        self._started = time.monotonic()
+        self._baseline = 0.0
+        self._baseline_samples = 0
+        self._loud_blocks = 0
+        self._pre_roll.clear()
+
     def _callback(self, indata, frames, time_info, status):
         chunk = bytes(indata)
         level = float(np.abs(np.frombuffer(chunk, dtype=np.int16).astype(np.int32)).mean())
@@ -120,8 +172,9 @@ class BargeInMonitor:
         self._pre_roll.append(chunk)
         if time.monotonic() - self._started < self.grace_seconds:
             self._baseline_samples += 1
-            weight = 1.0 / self._baseline_samples
-            self._baseline = (1.0 - weight) * self._baseline + weight * level
+            # The speaker's energy changes across syllables. Remember its loudest
+            # calibrated block so normal TTS dynamics cannot look like a user.
+            self._baseline = max(self._baseline, level)
             return
         adaptive_threshold = max(self.minimum_threshold, self._baseline * self.threshold_ratio)
         self._loud_blocks = self._loud_blocks + 1 if level >= adaptive_threshold else 0
@@ -148,6 +201,8 @@ class BargeInMonitor:
         return path
 
     def __enter__(self):
+        # begin_playback() resets this at the first real output frame. Keeping an
+        # initial value also makes the monitor safe for callers without playback.
         self._started = time.monotonic()
         self._stream = sd.RawInputStream(
             samplerate=self.rate,
@@ -164,3 +219,66 @@ class BargeInMonitor:
         if self._stream is not None:
             self._stream.stop()
             self._stream.close()
+
+
+class PushToTalkMonitor:
+    """Interrupt playback only when the physical PTT key is held."""
+
+    def __init__(self) -> None:
+        self.rate = int(_setting("SAMPLE_RATE", "16000"))
+        self.blocksize = self.rate * 20 // 1000
+        device = _setting("INPUT_DEVICE")
+        self.device = int(device) if device and device.isdigit() else device or None
+        self.triggered = threading.Event()
+        self.phrase_complete = threading.Event()
+        self._stop = threading.Event()
+        self._recorded: list[bytes] = []
+        self._thread: threading.Thread | None = None
+        self._stream = None
+
+    def begin_playback(self) -> None:
+        pass
+
+    def _watch(self) -> None:
+        while not self._stop.is_set() and not PUSH_TO_TALK_TRIGGER.exists():
+            time.sleep(0.015)
+        if self._stop.is_set():
+            return
+
+        def callback(indata, frames, time_info, status):
+            self._recorded.append(bytes(indata))
+
+        try:
+            self._stream = sd.RawInputStream(
+                samplerate=self.rate, blocksize=self.blocksize, device=self.device,
+                channels=1, dtype="int16", callback=callback,
+            )
+            self._stream.start()
+            self.triggered.set()
+            while not self._stop.is_set() and PUSH_TO_TALK_TRIGGER.exists():
+                time.sleep(0.01)
+        finally:
+            if self._stream is not None:
+                self._stream.stop()
+                self._stream.close()
+            self.phrase_complete.set()
+
+    def capture_phrase(self) -> Path | None:
+        self.phrase_complete.wait(timeout=float(_setting("MAX_PHRASE_SECONDS", "30")))
+        if not self._recorded:
+            return None
+        path = Path(tempfile.gettempdir()) / "orion-push-to-talk-interruption.wav"
+        with wave.open(str(path), "wb") as wav:
+            wav.setnchannels(1); wav.setsampwidth(2); wav.setframerate(self.rate)
+            wav.writeframes(b"".join(self._recorded))
+        return path
+
+    def __enter__(self):
+        self._thread = threading.Thread(target=self._watch, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1)

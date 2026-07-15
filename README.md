@@ -63,6 +63,10 @@ Explicit application-install requests use Homebrew's cask catalog through an
 argument-safe background worker. ORION validates cask metadata, starts an
 observable job, keeps its output under the private runtime folder, verifies the
 installed cask/application, and posts a macOS notification when it finishes.
+If the publisher rejects Homebrew's download, the same persistent job opens the
+official HTTPS download in Safari, monitors the completed disk image, mounts it,
+installs the application, and performs final verification. The originating task
+remains linked to every phase and is completed only after that verification.
 Ask “Is Blender installed yet?” to inspect the latest job without another install.
 
 The menu-bar **Cloud Limit** item is a direct toggle. When on, the configured
@@ -107,6 +111,19 @@ GOOGLE_REFRESH_TOKEN=
 
 The OAuth grant needs Drive-file, Sheets, Docs, and Slides scopes. ORION never
 stores those credentials in its memory, replay, diagnostics, or model context.
+
+### Native creative and engineering workers
+
+ORION can generate durable, editable projects through installed application APIs:
+
+- Blender: structured scenes, procedural component detail, physical accent-light placement, neutral cinematic lighting, cameras, safe in-place refinements with backups, `.blend`, and rendered previews.
+- FreeCAD: structured parametric solids, editable `.FCStd`, and STEP/STL exports.
+- OpenSCAD: self-contained `.scad` source with verified STL compilation.
+- DaVinci Resolve: project settings, media import, media pools, timelines, and saved Resolve projects.
+
+Generated files and manifests are stored under `~/Documents/ORION Projects`. Each
+worker requires an explicit creation request, publishes compact background progress,
+and verifies its native artifacts before ORION reports completion.
 
 ## Capabilities
 

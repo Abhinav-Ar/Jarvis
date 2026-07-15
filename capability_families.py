@@ -21,7 +21,16 @@ class Family:
 
 
 def _app(name: str) -> bool:
-    return (Path("/Applications") / f"{name}.app").exists() or (Path.home() / "Applications" / f"{name}.app").exists()
+    # Some official macOS downloads include a version in the bundle name
+    # (for example OpenSCAD-2021.01.app). Treat those as the same supported app.
+    for root in (Path("/Applications"), Path.home() / "Applications"):
+        if (
+            (root / f"{name}.app").exists()
+            or any(root.glob(f"{name}-*.app"))
+            or (root / name / f"{name}.app").exists()
+        ):
+            return True
+    return False
 
 
 def _google_available() -> bool:
@@ -34,7 +43,7 @@ def families() -> dict[str, Family]:
     codex = bool(shutil.which("codex") or Path("/Applications/ChatGPT.app/Contents/Resources/codex").exists())
     google = _google_available()
     microsoft = bool(os.getenv("MICROSOFT_ACCESS_TOKEN"))
-    creative = any(_app(name) for name in ("Adobe Photoshop 2026", "Adobe Illustrator 2026", "Adobe Premiere Pro 2026", "DaVinci Resolve", "Blender"))
+    creative = any(_app(name) for name in ("Adobe Photoshop 2026", "Adobe Illustrator 2026", "Adobe Premiere Pro 2026", "DaVinci Resolve", "Movavi Video Editor 26", "Blender"))
     cad = any(_app(name) for name in ("Autodesk Fusion", "Fusion 360", "AutoCAD", "FreeCAD", "OpenSCAD", "Rhino 8", "Shapr3D", "Blender"))
     return {
         "google_workspace": Family(
@@ -59,13 +68,13 @@ def families() -> dict[str, Family]:
         "creative": Family(
             "Creative", "Image, design, audio, video, and 3D content production.",
             ("image.generate", "design.edit", "video.edit", "audio.edit", "3d.texture"),
-            ("image", "design", "photoshop", "illustrator", "video", "audio", "creative", "render", "texture"),
+            ("image", "design", "photoshop", "illustrator", "video", "audio", "creative", "render", "texture", "blender", "davinci", "da vinci", "resolve", "movavi"),
             creative, "native_adapter", "Install and authorize a supported creative application" if not creative else "",
         ),
         "engineering": Family(
             "Engineering and CAD", "Parametric CAD, drawings, simulation, slicing, rendering, and validation.",
             ("cad.model", "cad.drawing", "simulation.run", "dimensions.verify", "render.preview"),
-            ("cad", "model", "part", "assembly", "drawing", "simulation", "engineering", "3d print"),
+            ("cad", "model", "part", "assembly", "drawing", "simulation", "engineering", "3d print", "freecad", "free cad", "openscad", "open scad", "blender"),
             cad, "application_api", "Install a supported CAD application with scripting/API access" if not cad else "",
         ),
         "business": Family(

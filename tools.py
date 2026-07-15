@@ -604,13 +604,89 @@ TOOL_DEFINITIONS = [
         "parameters": {"type": "object", "properties": {"title": {"type": "string"}, "confirmed": {"type": "boolean"}}, "required": ["title", "confirmed"], "additionalProperties": False},
         "strict": True,
     },
+    {
+        "type": "function", "name": "blender_create_project",
+        "description": "Create and verify an editable Blender project from structured geometry, materials, camera, lighting, and an optional rendered preview. Use only for an explicit project-creation request.",
+        "parameters": {"type": "object", "properties": {
+            "project_name": {"type": "string"}, "description": {"type": "string"},
+            "objects": {"type": "array", "maxItems": 50, "items": {"type": "object", "properties": {
+                "name": {"type": "string"}, "type": {"type": "string", "enum": ["cube", "sphere", "cylinder", "cone", "torus", "text"]},
+                "dimensions": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                "location": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                "rotation": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                "color": {"type": "string"}, "metallic": {"type": "number"}, "roughness": {"type": "number"}, "text": {"type": "string"}
+            }, "required": ["name", "type", "dimensions", "location", "rotation", "color", "metallic", "roughness", "text"], "additionalProperties": False}},
+            "render": {"type": "boolean"},
+            "lighting_color": {"type": "string", "description": "Hex color for general scene illumination. Keep this neutral white unless the user explicitly requests the entire environment be color-washed."},
+            "lighting_strength": {"type": "number", "minimum": 0.1, "maximum": 1.6},
+            "accent_style": {"type": "string", "enum": ["none", "desk_perimeter", "under_desk", "monitor_backlight"], "description": "Physical placement for requested neon/RGB/accent illumination; never fake a light with a sphere object."},
+            "accent_color": {"type": "string", "description": "Hex color of physical accent strips."},
+            "accent_strength": {"type": "number", "minimum": 0.1, "maximum": 3.0},
+            "confirmed": {"type": "boolean"}
+        }, "required": ["project_name", "description", "objects", "render", "lighting_color", "lighting_strength", "accent_style", "accent_color", "accent_strength", "confirmed"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "blender_refine_project",
+        "description": "Refine the active verified ORION Blender project in place while preserving its authored geometry. Use for follow-ups such as add, change, retry, replace, or adjust lighting. It can add procedural desk/keyboard detail, replace generated accent lights, rerender, save, and reopen the exact project.",
+        "parameters": {"type": "object", "properties": {
+            "project_name": {"type": "string"}, "description": {"type": "string"},
+            "accent_style": {"type": "string", "enum": ["none", "desk_perimeter", "under_desk", "monitor_backlight"]},
+            "accent_color": {"type": "string"}, "accent_strength": {"type": "number", "minimum": 0.1, "maximum": 3.0},
+            "render": {"type": "boolean"}, "confirmed": {"type": "boolean"}
+        }, "required": ["project_name", "description", "accent_style", "accent_color", "accent_strength", "render", "confirmed"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "native_project_open",
+        "description": "Open and visibly load the exact editable file for a verified ORION native project. Use this instead of open_application when the user asks to open, show, or load a Blender, FreeCAD, or OpenSCAD project.",
+        "parameters": {"type": "object", "properties": {
+            "application": {"type": "string", "enum": ["Blender", "FreeCAD", "OpenSCAD"]},
+            "project_name": {"type": "string", "description": "Exact project name, or empty to open the newest verified project for that application."}
+        }, "required": ["application", "project_name"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "freecad_create_project",
+        "description": "Create and verify an editable FreeCAD document containing structured parametric solids and export it as STEP or STL. Use only for an explicit CAD creation request.",
+        "parameters": {"type": "object", "properties": {
+            "project_name": {"type": "string"}, "description": {"type": "string"},
+            "parts": {"type": "array", "maxItems": 100, "items": {"type": "object", "properties": {
+                "name": {"type": "string"}, "type": {"type": "string", "enum": ["box", "cylinder", "sphere", "cone"]},
+                "dimensions": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
+            }, "required": ["name", "type", "dimensions", "position"], "additionalProperties": False}},
+            "export_format": {"type": "string", "enum": ["step", "stl"]}, "confirmed": {"type": "boolean"}
+        }, "required": ["project_name", "description", "parts", "export_format", "confirmed"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "openscad_create_project",
+        "description": "Create a self-contained editable OpenSCAD source project and compile it into a verified STL. Use for explicit code-driven parametric CAD generation.",
+        "parameters": {"type": "object", "properties": {
+            "project_name": {"type": "string"}, "description": {"type": "string"},
+            "source": {"type": "string"}, "confirmed": {"type": "boolean"}
+        }, "required": ["project_name", "description", "source", "confirmed"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "resolve_create_project",
+        "description": "Create and verify a DaVinci Resolve project, project settings, media pool, and editable timeline through Blackmagic's official local scripting API. Use only when explicitly requested.",
+        "parameters": {"type": "object", "properties": {
+            "project_name": {"type": "string"}, "timeline_name": {"type": "string"},
+            "media_paths": {"type": "array", "items": {"type": "string"}, "maxItems": 100},
+            "width": {"type": "integer"}, "height": {"type": "integer"}, "fps": {"type": "integer"},
+            "confirmed": {"type": "boolean"}
+        }, "required": ["project_name", "timeline_name", "media_paths", "width", "height", "fps", "confirmed"], "additionalProperties": False},
+        "strict": True,
+    },
 ]
 
 
 TOOL_GROUPS = {
     "web": {"__web_search__", "get_weather", "open_search", "browser_navigate"},
     "spotify": {"spotify_control", "spotify_play_playlist", "spotify_create_discovery_playlist"},
-    "mac": {"open_application", "quit_application", "set_system_volume", "clipboard", "system_status", "show_notification"},
+    "mac": {"open_application", "native_project_open", "quit_application", "set_system_volume", "clipboard", "system_status", "show_notification"},
     "productivity": {
         "create_reminder", "create_note", "create_calendar_event", "todoist_create_task",
         "create_email_draft", "find_contact", "find_files", "apple_shortcuts",
@@ -624,6 +700,7 @@ TOOL_GROUPS = {
     "capabilities": {"capability_families_status", "objective_compile"},
     "google_workspace": {"objective_compile", "google_drive_search", "google_create_spreadsheet", "google_create_document", "google_create_presentation", "browser_navigate"},
     "software": {"install_application", "installation_status"},
+    "native_projects": {"blender_create_project", "blender_refine_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open", "find_files", "open_application", "desktop_window_arrange"},
 }
 
 MUTATING_TOOLS = {
@@ -638,6 +715,7 @@ MUTATING_TOOLS = {
     "memory_store", "memory_forget", "orion_teach_workflow",
     "codex_generate", "generation_cancel",
     "google_create_spreadsheet", "google_create_document", "google_create_presentation",
+    "blender_create_project", "blender_refine_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open",
     "project_session_start", "project_session_resume", "project_session_close",
 }
 
@@ -661,6 +739,7 @@ def select_definitions(request: str) -> list[dict]:
         (("spotify", "playlist", "song", "music", "track", "album", "artist"), "spotify"),
         (("github", "git ", "repository", "repo", "commit", "push", "branch"), "git"),
         (("screen", "desktop", "click", "type into", "what do you see", "fill out"), "desktop"),
+        (("blender", "freecad", "free cad", "openscad", "open scad", "davinci", "da vinci", "resolve"), "desktop"),
         (("weather", "news", "search", "website", "url", ".com", "safari", "browser"), "web"),
         (("reminder", "note", "calendar", "todoist", "email", "contact", "file", "shortcut"), "productivity"),
         (("light", "thermostat", "home assistant", "switch"), "home"),
@@ -672,6 +751,7 @@ def select_definitions(request: str) -> list[dict]:
         (("what can you do", "capability", "worker families", "available workers", "adapter"), "capabilities"),
         (("google drive", "google sheet", "spreadsheet", "google doc", "google slides", "budget", "finances", "expense tracker"), "google_workspace"),
         (("install ", "download ", "is installed", "installation", "installed yet"), "software"),
+        (("blender", "freecad", "free cad", "openscad", "open scad", "davinci", "da vinci", "resolve", "3d model", "cad model", "video project", "timeline"), "native_projects"),
     )
     for markers, group in routes:
         if any(marker in text for marker in markers):
@@ -820,7 +900,37 @@ def google_create_presentation(title: str, confirmed: bool) -> dict:
     return google_workspace.create_presentation(title, confirmed)
 
 
-def execute(name: str, arguments: dict) -> dict:
+def blender_create_project(**arguments) -> dict:
+    import blender_worker
+    return blender_worker.create_project(**arguments)
+
+
+def blender_refine_project(**arguments) -> dict:
+    import blender_worker
+    return blender_worker.refine_project(**arguments)
+
+
+def freecad_create_project(**arguments) -> dict:
+    import freecad_worker
+    return freecad_worker.create_project(**arguments)
+
+
+def openscad_create_project(**arguments) -> dict:
+    import openscad_worker
+    return openscad_worker.create_project(**arguments)
+
+
+def resolve_create_project(**arguments) -> dict:
+    import resolve_worker
+    return resolve_worker.create_project(**arguments)
+
+
+def native_project_open(application: str, project_name: str = "") -> dict:
+    import project_workspace
+    return project_workspace.open_project(application, project_name)
+
+
+def execute(name: str, arguments: dict, context: dict | None = None) -> dict:
     diagnostics.event("safety_classified", tool=name, risk=platform().risk_for(name))
     handlers = {
         "get_weather": get_weather,
@@ -876,6 +986,12 @@ def execute(name: str, arguments: dict) -> dict:
         "google_create_spreadsheet": google_create_spreadsheet,
         "google_create_document": google_create_document,
         "google_create_presentation": google_create_presentation,
+        "blender_create_project": blender_create_project,
+        "blender_refine_project": blender_refine_project,
+        "freecad_create_project": freecad_create_project,
+        "openscad_create_project": openscad_create_project,
+        "resolve_create_project": resolve_create_project,
+        "native_project_open": native_project_open,
         "install_application": app_installer.install,
         "installation_status": app_installer.status,
         "project_session_start": project_workflow.start,
@@ -885,7 +1001,15 @@ def execute(name: str, arguments: dict) -> dict:
     }
     if name not in handlers:
         return {"ok": False, "error": f"Unknown tool: {name}"}
-    result = recovery.execute(name, arguments, handlers[name])
+    effective_arguments = dict(arguments)
+    if name == "install_application" and context:
+        effective_arguments.update({
+            "_request_id": str(context.get("request_id", "")),
+            "_task_id": str(context.get("task_id", "")),
+        })
+    if name in {"blender_create_project", "blender_refine_project", "freecad_create_project", "openscad_create_project", "resolve_create_project"} and context:
+        effective_arguments["_request_id"] = str(context.get("request_id", ""))
+    result = recovery.execute(name, effective_arguments, handlers[name])
     if result.get("ok") and name in {"open_application", "browser_navigate"}:
         application = str(result.get("application") or result.get("browser") or arguments.get("name") or "").strip()
         if application:
@@ -901,6 +1025,8 @@ def result_summary(name: str, arguments: dict, result: dict) -> str:
         return ""
     if name == "open_application":
         return f"{result.get('application') or arguments.get('name', 'The application')} is open."
+    if name == "native_project_open":
+        return f"I opened {result.get('project') or arguments.get('project_name')} in {result.get('application') or arguments.get('application')}."
     if name == "quit_application":
         return f"{result.get('application') or arguments.get('name', 'The application')} is closed."
     if name == "browser_navigate":
@@ -948,6 +1074,12 @@ def result_summary(name: str, arguments: dict, result: dict) -> str:
         return f"I created {result.get('title', 'the document')} in Google Drive."
     if name == "google_create_presentation":
         return f"I created {result.get('title', 'the presentation')} in Google Drive."
+    if name in {"blender_create_project", "freecad_create_project", "openscad_create_project", "resolve_create_project"}:
+        opened = " and opened it" if result.get("opened") else ""
+        return f"I created and verified the editable {result.get('application')} project {result.get('project')}{opened}. Its files are in {result.get('folder')}."
+    if name == "blender_refine_project":
+        opened = " and reopened it" if result.get("opened") else ""
+        return f"I refined and rerendered {result.get('project')}{opened} in Blender."
     if name == "install_application":
         application = result.get("application") or arguments.get("application") or "The application"
         if result.get("status") == "installed":

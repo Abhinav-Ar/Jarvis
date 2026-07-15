@@ -260,6 +260,21 @@ class OrionKernel:
         }
         for name, (category, mode, capabilities) in definitions.items():
             self.register_adapter(name, category, mode, capabilities)
+        try:
+            import mac_tools
+            categories = {
+                "Blender": "creative_engineering",
+                "FreeCAD": "engineering",
+                "OpenSCAD": "engineering",
+                "DaVinci Resolve": "creative",
+            }
+            for application in mac_tools.workspace_applications():
+                self.register_adapter(
+                    application["name"], categories.get(application["name"], "application"),
+                    "native_workspace", application["capabilities"],
+                )
+        except Exception as exc:
+            diagnostics.event("workspace_application_registration_failed", level="warning", error=str(exc))
 
     def adapters(self) -> dict:
         with self._lock, self._connect() as db:
@@ -333,6 +348,15 @@ class OrionKernel:
                     self._publish_status()
             except Exception as exc:
                 diagnostics.event("generation_monitor_failed", level="warning", error=str(exc))
+            try:
+                import app_installer
+                updates = app_installer.poll_jobs()
+                if updates:
+                    self.observe("installation.latest", updates[-1], "installation_supervisor", ttl=86400)
+                    self._publish_status()
+                    diagnostics.event("installation_supervisor_observed", **updates[-1])
+            except Exception as exc:
+                diagnostics.event("installation_monitor_failed", level="warning", error=str(exc))
 
     def _observe_due_jobs(self) -> None:
         try:

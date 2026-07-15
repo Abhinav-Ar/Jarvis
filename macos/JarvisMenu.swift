@@ -24,6 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private lazy var cloudLimitDisabledFlag = appDirectory.appendingPathComponent(".runtime/cloud-limit-disabled")
     private lazy var inputModeFile = appDirectory.appendingPathComponent(".runtime/input-mode")
     private lazy var pushToTalkTrigger = appDirectory.appendingPathComponent(".runtime/push-to-talk-active")
+    private lazy var textCommandDirectory = appDirectory.appendingPathComponent(".runtime/text-commands")
+    private lazy var cancelTaskFile = appDirectory.appendingPathComponent(".runtime/cancel-current-task")
     private var statusItem: NSStatusItem!
     private var statusMenuItem: NSMenuItem!
     private var detailMenuItem: NSMenuItem!
@@ -43,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var sampledLuminance: CGFloat = 0.25
     private var luminanceSampling = false
     private var recordedMissingScreenPermission = false
+    private weak var applicationBeforeTextInput: NSRunningApplication?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -69,6 +72,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         menu.addItem(desktopControlItem)
         inputModeItem = NSMenuItem(title: "Input Mode: Push to Talk", action: #selector(toggleInputMode), keyEquivalent: "")
         menu.addItem(inputModeItem)
+        menu.addItem(NSMenuItem(title: "Type to ORION…", action: #selector(showTextInput), keyEquivalent: "t"))
+        menu.addItem(NSMenuItem(title: "Cancel Current Task", action: #selector(cancelCurrentTask), keyEquivalent: "."))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Start ORION", action: #selector(startJarvis), keyEquivalent: "s"))
         menu.addItem(NSMenuItem(title: "Stop ORION", action: #selector(stopJarvis), keyEquivalent: "x"))
@@ -268,6 +273,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             let baseLimit = value["cloud_base_limit"] as? Int ?? 100
             let limitEnabled = !FileManager.default.fileExists(atPath: cloudLimitDisabledFlag.path)
             let tasks = value["task_history"] as? Int ?? 0
+            let checkpoints = value["execution_checkpoints"] as? Int ?? 0
+            let interrupted = value["interrupted_tasks"] as? Int ?? 0
             let goals = value["active_goals"] as? Int ?? 0
             let facts = value["world_facts"] as? Int ?? 0
             let adapters = value["adapters"] as? Int ?? 0
@@ -275,7 +282,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             let totalFamilies = value["capability_families_total"] as? Int ?? 0
             let project = value["active_project"] as? String ?? ""
             let projectLabel = project.isEmpty ? "no active project" : "project: \(project)"
-            platformMenuItem.title = "ORION: \(availableFamilies)/\(totalFamilies) families • \(projectLabel) • \(goals) goals • \(facts) observations • \(adapters) adapters • \(tasks) tasks • \(calls) cloud calls"
+            let recoveryLabel = interrupted > 0 ? " • \(interrupted) resumable" : ""
+            platformMenuItem.title = "ORION: \(availableFamilies)/\(totalFamilies) families • \(projectLabel) • \(goals) goals • \(facts) observations • \(adapters) adapters • \(checkpoints) verified actions • \(tasks) tasks\(recoveryLabel) • \(calls) cloud calls"
             cloudMenuItem.title = limitEnabled
                 ? "Cloud Limit: On • \(calls) / \(baseLimit)"
                 : "Cloud Limit: Off • \(calls) calls"
@@ -319,7 +327,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         }
         if hud == nil {
             let frame = targetScreen().visibleFrame
-            let panel = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            let panel = OrionHUDPanel(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
             panel.level = .floating
             panel.isOpaque = false
             panel.backgroundColor = .clear
@@ -331,6 +339,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             let view = JarvisHUDView(frame: NSRect(origin: .zero, size: frame.size))
             view.autoresizingMask = [.width, .height]
+            view.onSubmitCommand = { [weak self] command in self?.submitTypedCommand(command) }
+            view.onCancelCommand = { [weak self] in self?.restoreFocusAfterTextInput() }
+            view.onCancelTask = { [weak self] in self?.cancelCurrentTask() }
             panel.contentView = view
             hud = panel
             hudView = view
@@ -389,9 +400,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         hudView?.backgroundLuminance = sampledLuminance
         requestLuminanceSample()
         hudView?.needsDisplay = true
-        let frame = targetScreen().visibleFrame
-        hud?.setFrame(frame, display: true)
-        hudView?.frame = NSRect(origin: .zero, size: frame.size)
+        if hudView?.isComposerFocused != true {
+            let frame = targetScreen().visibleFrame
+            hud?.setFrame(frame, display: true)
+            hudView?.frame = NSRect(origin: .zero, size: frame.size)
+        }
         hud?.orderFrontRegardless()
         updateHUDInteraction()
     }
@@ -457,8 +470,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             hud?.ignoresMouseEvents = true
             return
         }
-        let local = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
-        panel.ignoresMouseEvents = !view.containsInteractivePoint(local)
+        if view.isComposerFocused {
+            panel.ignoresMouseEvents = false
+        } else {
+            let local = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
+            panel.ignoresMouseEvents = !view.containsInteractivePoint(local)
+        }
+    }
+
+    private func writeActivityState(_ state: String, _ label: String, _ detail: String) {
+        let payload: [String: Any] = [
+            "state": state, "label": label, "detail": detail,
+            "updated": Date().timeIntervalSince1970,
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: payload) {
+            try? FileManager.default.createDirectory(at: activityFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: activityFile, options: .atomic)
+        }
+    }
+
+    @objc private func showTextInput() {
+        if !isRunning() { startJarvis() }
+        if let frontmost = NSWorkspace.shared.frontmostApplication,
+           frontmost.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            applicationBeforeTextInput = frontmost
+        }
+        try? FileManager.default.createDirectory(at: sessionUIFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: sessionUIFile.path, contents: Data())
+        let busyStates = ["planning", "working", "verifying", "speaking", "transcribing"]
+        var currentState = ""
+        if let data = try? Data(contentsOf: activityFile),
+           let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            currentState = value["state"] as? String ?? ""
+        }
+        if !busyStates.contains(currentState) {
+            writeActivityState("needs_input", "Type to ORION", "Enter sends • Shift-Enter adds a line • Escape returns to your app")
+        }
+        refreshStatus()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+            guard let self, let panel = self.hud else { return }
+            panel.ignoresMouseEvents = false
+            NSApp.activate(ignoringOtherApps: true)
+            panel.makeKeyAndOrderFront(nil)
+            self.hudView?.focusComposer()
+        }
+    }
+
+    private func submitTypedCommand(_ command: String) {
+        let text = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        if !isRunning() { startJarvis() }
+        do {
+            try FileManager.default.createDirectory(at: textCommandDirectory, withIntermediateDirectories: true)
+            let payload: [String: Any] = ["text": text, "submitted_at": Date().timeIntervalSince1970]
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            let destination = textCommandDirectory.appendingPathComponent("\(UUID().uuidString).json")
+            try data.write(to: destination, options: .atomic)
+            FileManager.default.createFile(atPath: sessionUIFile.path, contents: Data())
+            writeActivityState("planning", "Queued…", String(text.prefix(100)))
+        } catch {
+            writeActivityState("error", "Couldn’t send", error.localizedDescription)
+            NSSound.beep()
+        }
+        restoreFocusAfterTextInput()
+        refreshStatus()
+    }
+
+    private func restoreFocusAfterTextInput() {
+        hud?.makeFirstResponder(nil)
+        hud?.resignKey()
+        applicationBeforeTextInput?.activate(options: [])
+    }
+
+    @objc private func cancelCurrentTask() {
+        let payload: [String: Any] = ["source": "menu_or_hud", "created": Date().timeIntervalSince1970]
+        if let data = try? JSONSerialization.data(withJSONObject: payload) {
+            try? data.write(to: cancelTaskFile, options: .atomic)
+        }
+        writeActivityState("working", "Stopping safely…", "ORION will stop before the next action")
+        refreshStatus()
     }
 
     @objc private func startJarvis() {

@@ -9,17 +9,23 @@ from urllib.parse import urlparse
 import mac_tools
 
 
-def _stage(application: str) -> None:
+def _tool(name: str, arguments: dict, request_id: str = "") -> dict:
+    """Run fast-lane actions through the same supervisor as model-selected tools."""
+    import tools
+    return tools.execute(name, arguments, context={"request_id": request_id, "task_id": ""})
+
+
+def _stage(application: str, request_id: str = "") -> None:
     try:
         import desktop
         import activity
-        result = desktop.arrange_windows([application], confirmed=True)
+        result = _tool("desktop_window_arrange", {"applications": [application], "confirmed": True}, request_id)
         activity.record_step("stage_application_window", application, result)
     except Exception:
         pass
 
 
-def execute(text: str) -> str | None:
+def execute(text: str, request_id: str = "") -> str | None:
     raw = " ".join(text.lower().strip().split()).rstrip(".,!?")
     raw = re.sub(r"^(?:hey|okay|ok|please)[, ]+", "", raw)
     workspace_match = re.fullmatch(
@@ -41,7 +47,7 @@ def execute(text: str) -> str | None:
                 ["Open both applications", "Exit fullscreen if necessary", "Move both windows to one display", "Tile the windows", "Verify both frames"],
             )
             activity.update("working", "Preparing workspace…", " • ".join(applications))
-            result = desktop.arrange_windows(applications, confirmed=True)
+            result = _tool("desktop_window_arrange", {"applications": applications, "confirmed": True}, request_id)
             activity.record_step("arrange_two_app_workspace", ", ".join(applications), result)
             if result.get("ok"):
                 if result.get("layout") == "stack":
@@ -62,10 +68,10 @@ def execute(text: str) -> str | None:
     match = combined_navigation or navigation_match
     if match:
         address = match.group(1)
-        result = mac_tools.open_url(address, "Safari")
+        result = _tool("browser_navigate", {"url": address, "browser": "Safari"}, request_id)
         host = urlparse(result.get("url", "")).netloc.removeprefix("www.")
         if result.get("ok"):
-            _stage("Safari")
+            _stage("Safari", request_id)
             return (f"Safari is open on {host or address}." if combined_navigation else
                     f"{host or address} is open in Safari.")
 
@@ -168,26 +174,26 @@ def execute(text: str) -> str | None:
 
     if command in {"stop the music", "pause the music", "pause spotify", "stop spotify"}:
         import spot
-        result = spot.control("pause")
+        result = _tool("spotify_control", {"action": "pause"}, request_id)
         return "Paused." if result.get("ok") else None
     if command in {"resume the music", "resume spotify", "play spotify"}:
         import spot
-        result = spot.control("play")
+        result = _tool("spotify_control", {"action": "play"}, request_id)
         return "Playing." if result.get("ok") else None
     if command in {"skip", "skip this song", "next song"}:
         import spot
-        result = spot.control("next")
+        result = _tool("spotify_control", {"action": "next"}, request_id)
         return "Skipped." if result.get("ok") else None
     if command in {"previous", "previous song", "go back a song"}:
         import spot
-        result = spot.control("previous")
+        result = _tool("spotify_control", {"action": "previous"}, request_id)
         return "Going back." if result.get("ok") else None
 
     playlist_match = re.fullmatch(r"(?:play|start|open) (?:my )?(?:spotify )?playlist (?:named |called )?(.+?)(?: on spotify)?", command)
     if playlist_match:
         import spot
         name = playlist_match.group(1).strip()
-        result = spot.play_playlist(name)
+        result = _tool("spotify_play_playlist", {"name": name}, request_id)
         return f"Playing {result.get('name', name)}." if result.get("ok") else None
 
     project_close_match = re.fullmatch(
@@ -209,7 +215,7 @@ def execute(text: str) -> str | None:
         if requested in {"current", "current app", "this", "this app", "active app"}:
             requested = mac_tools.frontmost_application()
         app = mac_tools.canonical_application_name(requested)
-        result = mac_tools.quit_application(app)
+        result = _tool("quit_application", {"name": app}, request_id)
         if result.get("ok"):
             return f"{app} is closed."
         error = result.get("error", "")
@@ -221,21 +227,21 @@ def execute(text: str) -> str | None:
         if not mac_tools.application_exists(requested):
             return None
         app = mac_tools.canonical_application_name(requested)
-        result = mac_tools.open_application(app)
+        result = _tool("open_application", {"name": app}, request_id)
         if result.get("ok"):
-            _stage(app)
+            _stage(app, request_id)
         return f"{app} is open." if result.get("ok") else None
 
     volume_match = re.fullmatch(r"set (?:the )?volume to (\d{1,3})(?: percent)?", command)
     if volume_match:
         level = min(100, int(volume_match.group(1)))
-        mac_tools.set_system_volume(level)
+        _tool("set_system_volume", {"level": level}, request_id)
         return f"Volume set to {level} percent."
     if command in {"mute", "mute the volume", "mute my mac"}:
-        mac_tools.set_system_volume(0)
+        _tool("set_system_volume", {"level": 0}, request_id)
         return "Muted."
     if command in {"computer status", "system status", "battery status", "how is my laptop doing"}:
-        result = mac_tools.system_status()
+        result = _tool("system_status", {}, request_id)
         if result.get("ok"):
             battery = result.get("battery_percent")
             power = " and charging" if result.get("power_connected") else ""

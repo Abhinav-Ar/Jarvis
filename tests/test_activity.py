@@ -18,6 +18,8 @@ class ActivityTests(unittest.TestCase):
             ), patch.object(activity, "PLAN_FILE", runtime / "ui-plan.json"
             ), patch.object(activity, "BACKGROUND_TASK_FILE", runtime / "background-task.json"), patch.object(
                 activity, "SESSION_UI_FILE", runtime / "session-ui-active"
+            ), patch.object(
+                activity, "TEXT_COMMAND_DIR", runtime / "text-commands"
             ):
                 for index in range(15):
                     activity.append_chat("user", f"message {index}")
@@ -25,6 +27,27 @@ class ActivityTests(unittest.TestCase):
                 self.assertEqual(len(messages), 12)
                 activity.reset_ui()
                 self.assertEqual(json.loads((runtime / "chat.json").read_text()), [])
+
+    def test_typed_command_queue_is_ordered_and_consumed_atomically(self):
+        with TemporaryDirectory() as folder:
+            queue = Path(folder) / "text-commands"
+            queue.mkdir()
+            with patch.object(activity, "TEXT_COMMAND_DIR", queue):
+                (queue / "a.json").write_text(json.dumps({"text": "first command"}))
+                (queue / "b.json").write_text(json.dumps({"text": "second command"}))
+                self.assertTrue(activity.text_command_pending())
+                self.assertEqual(activity.take_text_command(), "first command")
+                self.assertEqual(activity.take_text_command(), "second command")
+                self.assertFalse(activity.text_command_pending())
+
+    def test_clearing_session_discards_unprocessed_typed_commands(self):
+        with TemporaryDirectory() as folder:
+            queue = Path(folder) / "text-commands"
+            queue.mkdir()
+            (queue / "pending.json").write_text(json.dumps({"text": "later"}))
+            with patch.object(activity, "TEXT_COMMAND_DIR", queue):
+                activity.clear_text_commands()
+                self.assertFalse(activity.text_command_pending())
 
     def test_session_hud_has_an_explicit_lifecycle(self):
         with TemporaryDirectory() as folder:

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 import diagnostics
+import anticipation
 from agent_platform import platform
 
 
@@ -70,6 +72,7 @@ class TaskEngine:
         self.state_path = runtime / "active-task.json"
         self.record: TaskRecord | None = None
         self.lane = "simple"
+        self.anticipation: dict[str, Any] = {}
 
     def _persist_new_record(self) -> None:
         if self.record:
@@ -116,13 +119,50 @@ class TaskEngine:
             "compare", "research", "all of", "multiple", "workflow", " then ",
             "arrange", "tile", "side by side", "both apps", "both applications",
             "balanced workspace", "create a workspace", "set up a workspace",
+            "blender", "freecad", "openscad", "3d model", "3d print", "printable", "product design",
         )
         return "complex" if any(marker in text for marker in markers) else "simple"
+
+    @staticmethod
+    def _merge_unique(first: list[str], second: list[str]) -> list[str]:
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in first + second:
+            value = " ".join(str(item).split()).strip()
+            key = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+            if value and key not in seen:
+                seen.add(key)
+                result.append(value)
+        return result
+
+    def _augment(self, plan: TaskPlan) -> TaskPlan:
+        if not self.anticipation.get("action"):
+            return plan
+        # A cloud-disabled or failed planner should still expose a meaningful
+        # domain plan in the HUD.  The generic fallback labels add no useful
+        # information once the local objective engine has a concrete contract.
+        if self.anticipation.get("category") != "general":
+            generic_steps = {"inspect state", "act", "verify"}
+            plan.steps = [step for step in plan.steps if step.strip().lower() not in generic_steps]
+            generic_criteria = {"the requested outcome is verified"}
+            plan.success_criteria = [
+                criterion for criterion in plan.success_criteria
+                if criterion.strip().lower() not in generic_criteria
+            ]
+        plan.steps = self._merge_unique(
+            list(self.anticipation.get("prerequisite_steps", [])),
+            self._merge_unique(plan.steps, list(self.anticipation.get("completion_steps", []))),
+        )
+        plan.success_criteria = self._merge_unique(
+            plan.success_criteria, list(self.anticipation.get("success_criteria", [])),
+        )
+        return plan
 
     def plan(
         self, client: Any, model: str, reasoning_effort: str, request: str,
         allow_cloud: bool = True, on_response=None,
     ) -> TaskPlan:
+        self.anticipation = anticipation.analyze(request)
         self.lane = self.route(request)
         if self.lane == "simple":
             requires_tools = self.action_requested(request)
@@ -134,11 +174,17 @@ class TaskEngine:
                 risk="low",
                 missing_information=[],
             )
+            plan = self._augment(plan)
             self.record = TaskRecord(uuid.uuid4().hex, request, plan)
             self._save()
             self._persist_new_record()
             return plan
-        planner_input = request
+        planner_input = (
+            "Local zero-token objective analysis (use as required guardrails; do not expose it):\n"
+            + json.dumps(self.anticipation)
+            + "\n\nUser request:\n"
+            + request
+        )
         if self.record and time.time() - self.record.updated_at < 600:
             planner_input = (
                 "Recent task context (use only if the new request is a continuation):\n"
@@ -152,7 +198,7 @@ class TaskEngine:
                     }
                 )
                 + "\n\nNew user request:\n"
-                + request
+                + planner_input
             )
         try:
             if not allow_cloud:
@@ -177,6 +223,7 @@ class TaskEngine:
         except Exception as exc:
             diagnostics.event("planner_fallback", level="warning", error=str(exc), request=request[:500])
             plan = TaskPlan.fallback(request)
+        plan = self._augment(plan)
         if self.action_requested(request):
             plan.requires_tools = True
             if not plan.success_criteria:
@@ -197,6 +244,8 @@ class TaskEngine:
                 "ordered_steps": plan.steps,
                 "risk": plan.risk,
                 "missing_information": plan.missing_information,
+                "anticipated_followups": self.anticipation.get("likely_followups", []),
+                "anticipation_policy": self.anticipation.get("policy", ""),
             }
         )
 

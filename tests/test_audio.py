@@ -11,6 +11,15 @@ from audio import BargeInMonitor
 
 
 class BargeInTests(unittest.TestCase):
+    def test_typed_command_can_wake_microphone_wait(self):
+        with TemporaryDirectory() as folder:
+            commands = Path(folder) / "text-commands"
+            commands.mkdir()
+            with patch.object(audio, "TEXT_COMMAND_DIR", commands):
+                self.assertFalse(audio._typed_command_pending())
+                (commands / "command.json").write_text("{}")
+                self.assertTrue(audio._typed_command_pending())
+
     def test_input_mode_file_switches_microphone_policy(self):
         with TemporaryDirectory() as folder:
             mode = Path(folder) / "input-mode"

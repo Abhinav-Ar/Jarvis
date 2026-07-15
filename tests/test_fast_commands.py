@@ -13,66 +13,69 @@ class FastCommandTests(unittest.TestCase):
     @patch("activity.record_step")
     @patch("activity.update")
     @patch("activity.set_execution_path")
-    @patch("desktop.arrange_windows", return_value={"ok": True})
+    @patch("fast_commands._tool", return_value={"ok": True})
     @patch("fast_commands.mac_tools.application_exists", return_value=True)
-    def test_two_app_workspace_bypasses_model(self, exists, arrange, plan, update, record):
+    def test_two_app_workspace_bypasses_model(self, exists, run_tool, plan, update, record):
         answer = fast_commands.execute(
             "Open GitHub Desktop and Visual Studio Code, then arrange them so I can work in both"
         )
         self.assertEqual(answer, "GitHub Desktop and Visual Studio Code are arranged in a balanced side-by-side workspace.")
-        arrange.assert_called_once_with(["GitHub Desktop", "Visual Studio Code"], confirmed=True)
+        run_tool.assert_called_once_with(
+            "desktop_window_arrange",
+            {"applications": ["GitHub Desktop", "Visual Studio Code"], "confirmed": True}, "",
+        )
 
     @patch("activity.record_step")
     @patch("activity.update")
     @patch("activity.set_execution_path")
-    @patch("desktop.arrange_windows", return_value={"ok": True})
+    @patch("fast_commands._tool", return_value={"ok": True})
     @patch("fast_commands.mac_tools.application_exists", return_value=True)
-    def test_balanced_workspace_wording_is_one_paired_operation(self, exists, arrange, plan, update, record):
+    def test_balanced_workspace_wording_is_one_paired_operation(self, exists, run_tool, plan, update, record):
         answer = fast_commands.execute(
             "Open GitHub Desktop and Visual Studio Code and create a balanced workspace"
         )
         self.assertIn("balanced", answer)
-        arrange.assert_called_once_with(["GitHub Desktop", "Visual Studio Code"], confirmed=True)
+        run_tool.assert_called_once()
 
     @patch("fast_commands._stage")
     @patch("fast_commands.mac_tools.application_exists", return_value=True)
-    @patch("fast_commands.mac_tools.open_application", return_value={"ok": True})
-    def test_open_known_app_bypasses_model(self, opened, exists, stage):
+    @patch("fast_commands._tool", return_value={"ok": True, "frontmost": True})
+    def test_open_known_app_bypasses_model(self, run_tool, exists, stage):
         self.assertEqual(fast_commands.execute("Hey, open Safari"), "Safari is open.")
-        opened.assert_called_once_with("Safari")
-        stage.assert_called_once_with("Safari")
+        run_tool.assert_called_once_with("open_application", {"name": "Safari"}, "")
+        stage.assert_called_once_with("Safari", "")
 
-    @patch("fast_commands.mac_tools.quit_application", return_value={"ok": True})
-    def test_close_app_bypasses_model(self, closed):
+    @patch("fast_commands._tool", return_value={"ok": True, "closed": True})
+    def test_close_app_bypasses_model(self, run_tool):
         self.assertEqual(fast_commands.execute("Close Safari"), "Safari is closed.")
-        closed.assert_called_once_with("Safari")
+        run_tool.assert_called_once_with("quit_application", {"name": "Safari"}, "")
 
     @patch("fast_commands._stage")
     @patch("fast_commands.mac_tools.application_exists", return_value=True)
-    @patch("fast_commands.mac_tools.open_application", return_value={"ok": True})
-    def test_app_aliases_are_canonical(self, opened, exists, stage):
+    @patch("fast_commands._tool", return_value={"ok": True, "frontmost": True})
+    def test_app_aliases_are_canonical(self, run_tool, exists, stage):
         self.assertEqual(fast_commands.execute("Open Chrome"), "Google Chrome is open.")
-        opened.assert_called_once_with("Google Chrome")
+        run_tool.assert_called_once_with("open_application", {"name": "Google Chrome"}, "")
 
     def test_multistep_request_does_not_take_fast_lane(self):
         self.assertIsNone(fast_commands.execute("Open Safari and then go to Google"))
 
     @patch("fast_commands._stage")
-    @patch("fast_commands.mac_tools.open_url", return_value={"ok": True, "url": "https://google.com"})
-    def test_direct_website_navigation_bypasses_model(self, opened, stage):
+    @patch("fast_commands._tool", return_value={"ok": True, "url": "https://google.com", "frontmost": True})
+    def test_direct_website_navigation_bypasses_model(self, run_tool, stage):
         self.assertEqual(fast_commands.execute("Go to google.com"), "google.com is open in Safari.")
-        opened.assert_called_once_with("google.com", "Safari")
-        stage.assert_called_once_with("Safari")
+        run_tool.assert_called_once_with("browser_navigate", {"url": "google.com", "browser": "Safari"}, "")
+        stage.assert_called_once_with("Safari", "")
 
-    @patch("spot.play_playlist", return_value={"ok": True, "name": "UG"})
-    def test_named_playlist_bypasses_model(self, played):
+    @patch("fast_commands._tool", return_value={"ok": True, "name": "UG"})
+    def test_named_playlist_bypasses_model(self, run_tool):
         self.assertEqual(fast_commands.execute("Play my playlist named UG on Spotify"), "Playing UG.")
-        played.assert_called_once_with("ug")
+        run_tool.assert_called_once_with("spotify_play_playlist", {"name": "ug"}, "")
 
-    @patch("fast_commands.mac_tools.set_system_volume")
-    def test_volume_is_bounded(self, volume):
+    @patch("fast_commands._tool", return_value={"ok": True, "volume": 100})
+    def test_volume_is_bounded(self, run_tool):
         self.assertEqual(fast_commands.execute("Set volume to 150"), "Volume set to 100 percent.")
-        volume.assert_called_once_with(100)
+        run_tool.assert_called_once_with("set_system_volume", {"level": 100}, "")
 
     @patch("project_workflow.start", return_value={"ok": True, "repository": "Jarvis", "branch": "main"})
     def test_start_project_session_bypasses_model(self, start):

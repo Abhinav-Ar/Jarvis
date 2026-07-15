@@ -22,6 +22,18 @@ def _setting(name: str, default: str = "") -> str:
 RUNTIME = Path(_setting("RUNTIME_DIR", str(Path.home() / "Library/Application Support/Jarvis/.runtime")))
 INPUT_MODE_FILE = RUNTIME / "input-mode"
 PUSH_TO_TALK_TRIGGER = RUNTIME / "push-to-talk-active"
+TEXT_COMMAND_DIR = RUNTIME / "text-commands"
+
+
+class TypedCommandReady(Exception):
+    """Interrupt microphone waiting when the HUD submits typed input."""
+
+
+def _typed_command_pending() -> bool:
+    try:
+        return TEXT_COMMAND_DIR.is_dir() and any(TEXT_COMMAND_DIR.glob("*.json"))
+    except OSError:
+        return False
 
 
 def push_to_talk_enabled() -> bool:
@@ -73,6 +85,8 @@ class PhraseRecorder:
         ):
             while len(recorded) < self.max_blocks:
                 chunk = chunks.get()
+                if _typed_command_pending():
+                    raise TypedCommandReady
                 level = float(np.abs(np.frombuffer(chunk, dtype=np.int16).astype(np.int32)).mean())
                 if not speaking:
                     pre_roll.append(chunk)
@@ -98,6 +112,8 @@ class PhraseRecorder:
     def _listen_push_to_talk(self, on_speech_start=None) -> Path:
         """Keep the microphone closed until the user holds the PTT key."""
         while not PUSH_TO_TALK_TRIGGER.exists():
+            if _typed_command_pending():
+                raise TypedCommandReady
             time.sleep(0.02)
         recorded: list[bytes] = []
 

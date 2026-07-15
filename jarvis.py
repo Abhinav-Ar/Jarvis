@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 import activity
 import fast_commands
 import diagnostics
+import execution_supervisor
 from agent_platform import initialize_platform
 from orion_kernel import initialize_kernel
 
@@ -146,7 +147,7 @@ def main() -> int:
     assistant = OrionAssistant()
     recorder = None
     if not args.text:
-        from audio import PhraseRecorder, push_to_talk_enabled
+        from audio import PhraseRecorder, TypedCommandReady, push_to_talk_enabled
         recorder = PhraseRecorder()
 
     hotword = os.getenv("ORION_HOTWORD", "orion").lower()
@@ -158,13 +159,18 @@ def main() -> int:
 
     while True:
         try:
+            typed_input = False
             if args.text:
                 text = input("You: ").strip()
                 if text.lower() in {"exit", "quit"}:
                     break
             else:
                 listen_started = time.perf_counter()
-                if pending_audio_path is not None:
+                text = activity.take_text_command()
+                if text:
+                    typed_input = True
+                    print(f"Typed: {text}", flush=True)
+                elif pending_audio_path is not None:
                     print("Processing your interruption…")
                     audio_path = pending_audio_path
                     pending_audio_path = None
@@ -172,27 +178,34 @@ def main() -> int:
                     ptt_mode = push_to_talk_enabled()
                     print("Hold Right Option to speak…" if ptt_mode else f"Listening for ‘{hotword}’…")
                     activity.update("session" if session_active else "listening", "Hold Right Option" if ptt_mode else ("Ready" if session_active else "Listening"))
-                    audio_path = recorder.listen(on_speech_start=lambda: diagnostics.event("speech_started"))
-                try:
-                    print("Transcribing…", flush=True)
-                    transcription_started = time.perf_counter()
-                    text = assistant.transcribe(audio_path)
-                    transcription_seconds = time.perf_counter() - transcription_started
-                    diagnostics.event(
-                        "transcription_completed", duration_ms=round(transcription_seconds * 1000),
-                        transcript=text if os.getenv("ORION_LOG_TRANSCRIPTS", os.getenv("JARVIS_LOG_TRANSCRIPTS", "1")) == "1" else "[disabled]",
-                    )
-                finally:
-                    audio_path.unlink(missing_ok=True)
-                if text:
-                    print(f"Heard ({transcription_seconds:.1f}s transcription): {text}")
+                    try:
+                        audio_path = recorder.listen(on_speech_start=lambda: diagnostics.event("speech_started"))
+                    except TypedCommandReady:
+                        text = activity.take_text_command()
+                        typed_input = bool(text)
+                        if not typed_input:
+                            continue
+                if not typed_input:
+                    try:
+                        print("Transcribing…", flush=True)
+                        transcription_started = time.perf_counter()
+                        text = assistant.transcribe(audio_path)
+                        transcription_seconds = time.perf_counter() - transcription_started
+                        diagnostics.event(
+                            "transcription_completed", duration_ms=round(transcription_seconds * 1000),
+                            transcript=text if os.getenv("ORION_LOG_TRANSCRIPTS", os.getenv("JARVIS_LOG_TRANSCRIPTS", "1")) == "1" else "[disabled]",
+                        )
+                    finally:
+                        audio_path.unlink(missing_ok=True)
+                    if text:
+                        print(f"Heard ({transcription_seconds:.1f}s transcription): {text}")
 
             if not text:
                 continue
-            ptt_activation = not args.text and push_to_talk_enabled()
+            ptt_activation = not args.text and not typed_input and push_to_talk_enabled()
             if not request_is_active(
                 text,
-                text_mode=args.text,
+                text_mode=args.text or typed_input,
                 no_hotword=args.no_hotword or ptt_activation,
                 follow_up=session_active,
                 hotword=hotword,
@@ -203,11 +216,13 @@ def main() -> int:
 
             wake_detected = has_wake_phrase(text, hotword)
             request_id = uuid.uuid4().hex[:12]
+            execution_supervisor.begin_request(request_id)
             if wake_detected:
                 text = strip_wake_word(text, hotword)
-            lifecycle_authorized = args.text or args.no_hotword or ptt_activation or wake_detected
+            lifecycle_authorized = args.text or typed_input or args.no_hotword or ptt_activation or wake_detected
 
             if is_logoff_command(text) and lifecycle_authorized:
+                activity.clear_text_commands()
                 activity.end_session_ui()
                 restore_workspace()
                 activity.update("stopped", "Stopped")
@@ -218,6 +233,7 @@ def main() -> int:
                 break
 
             if is_satisfied_command(text) and lifecycle_authorized and session_active:
+                activity.clear_text_commands()
                 activity.append_chat("user", text)
                 activity.append_chat("assistant", "I’m glad I could help.")
                 activity.end_session_ui()
@@ -236,14 +252,14 @@ def main() -> int:
             if not text:
                 continue
 
-            if ptt_activation or wake_detected or args.text or args.no_hotword:
+            if ptt_activation or typed_input or wake_detected or args.text or args.no_hotword:
                 if not session_active:
                     assistant.reset_session()
                 session_active = True
                 activity.cue("heard")
                 diagnostics.event(
                     "request_activation_confirmed", request_id=request_id,
-                    method="push_to_talk" if ptt_activation else "wake_phrase",
+                    method="typed" if typed_input else ("push_to_talk" if ptt_activation else "wake_phrase"),
                 )
 
             activity.begin_session_ui()
@@ -262,9 +278,12 @@ def main() -> int:
             print("Thinking…", flush=True)
             activity.update("planning", "Planning…", text[:100])
             thinking_started = time.perf_counter()
-            diagnostics.event("request_started", request_id=request_id, request=text[:500], complex=is_complex_request(text))
+            diagnostics.event(
+                "request_started", request_id=request_id, request=text[:500],
+                complex=is_complex_request(text), input_source="typed" if typed_input else ("terminal" if args.text else "voice"),
+            )
             try:
-                fast_reply = fast_commands.execute(text)
+                fast_reply = fast_commands.execute(text, request_id=request_id)
             except Exception as fast_error:
                 diagnostics.event(
                     "fast_command_fallback", level="warning", request_id=request_id,
@@ -281,11 +300,16 @@ def main() -> int:
             print(f"ORION ({thinking_seconds:.1f}s thinking): {reply}")
             activity.append_chat("assistant", reply)
             speaking_started = time.perf_counter()
-            activity.update("speaking", "Responding…")
-            voice_start_seconds, interrupted, interruption_audio = assistant.speak(
-                reply, allow_barge_in=not args.text
-            )
-            if not args.text:
+            interrupted = False
+            interruption_audio = None
+            if typed_input:
+                voice_start_seconds = 0.0
+            else:
+                activity.update("speaking", "Responding…")
+                voice_start_seconds, interrupted, interruption_audio = assistant.speak(
+                    reply, allow_barge_in=not args.text
+                )
+            if not args.text and not typed_input:
                 total_seconds = time.perf_counter() - listen_started
                 speech_seconds = time.perf_counter() - speaking_started
                 print(
@@ -297,7 +321,7 @@ def main() -> int:
                     pending_audio_path = interruption_audio
                     session_active = True
                     continue
-            activity.update("session", "Your turn", "Conversation active — wake word not required")
+            activity.update("session", "Your turn", "Type below or hold Right Option to continue")
             activity.cue("complete")
             diagnostics.event("request_completed", request_id=request_id)
             if args.once:

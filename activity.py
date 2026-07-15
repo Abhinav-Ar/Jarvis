@@ -23,6 +23,7 @@ ACTION_FILE = RUNTIME / "actions.json"
 PLAN_FILE = RUNTIME / "ui-plan.json"
 BACKGROUND_TASK_FILE = RUNTIME / "background-task.json"
 SESSION_UI_FILE = RUNTIME / "session-ui-active"
+TEXT_COMMAND_DIR = RUNTIME / "text-commands"
 _lock = threading.Lock()
 _announcement_lock = threading.Lock()
 _last_announcements: dict[str, float] = {}
@@ -66,6 +67,48 @@ def begin_session_ui() -> None:
 def end_session_ui() -> None:
     try:
         SESSION_UI_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def text_command_pending() -> bool:
+    try:
+        return TEXT_COMMAND_DIR.is_dir() and any(TEXT_COMMAND_DIR.glob("*.json"))
+    except OSError:
+        return False
+
+
+def take_text_command() -> str:
+    """Atomically consume the oldest command submitted by the native HUD."""
+    try:
+        if not TEXT_COMMAND_DIR.is_dir():
+            return ""
+        for path in sorted(TEXT_COMMAND_DIR.glob("*.json"), key=lambda item: (item.stat().st_mtime, item.name)):
+            claimed = path.with_suffix(".processing")
+            try:
+                path.replace(claimed)
+            except OSError:
+                continue
+            try:
+                payload = json.loads(claimed.read_text(encoding="utf-8"))
+                text = str(payload.get("text", "")).strip()[:8000]
+            except (OSError, ValueError, TypeError):
+                text = ""
+            finally:
+                claimed.unlink(missing_ok=True)
+            if text:
+                return text
+    except OSError:
+        pass
+    return ""
+
+
+def clear_text_commands() -> None:
+    try:
+        if TEXT_COMMAND_DIR.is_dir():
+            for path in TEXT_COMMAND_DIR.iterdir():
+                if path.suffix in {".json", ".processing"}:
+                    path.unlink(missing_ok=True)
     except OSError:
         pass
 
@@ -212,9 +255,15 @@ def finish_action(action_id: str, result: dict) -> None:
                     if not result.get("ok"):
                         action["result"] = str(result.get("error", "Action failed"))[:120]
                     else:
+                        supervision = result.get("_supervision", {}) if isinstance(result.get("_supervision"), dict) else {}
+                        verified_detail = ""
+                        if supervision.get("verified"):
+                            checks = ", ".join(str(item).replace("_", " ") for item in supervision.get("checks", [])[:2])
+                            attempts = int(supervision.get("attempts", 1) or 1)
+                            verified_detail = f"Verified{f' after {attempts} attempts' if attempts > 1 else ''}{f' • {checks}' if checks else ''}"
                         action["result"] = str(
                             result.get("_activity_detail") or result.get("summary") or
-                            result.get("message") or "Completed and verified"
+                            result.get("message") or verified_detail or "Completed and verified"
                         )[:160]
                     break
             ACTION_FILE.write_text(json.dumps(actions[-20:]))

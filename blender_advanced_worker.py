@@ -6,6 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import design_intelligence
 import project_workspace as workspace
 
 
@@ -17,6 +18,7 @@ PRIMITIVES = {"none", "cube", "cylinder", "sphere", "cone", "torus"}
 def create_project(
     project_name: str, description: str, components: list[dict], booleans: list[dict],
     world_color: str, accent_color: str, render: bool, confirmed: bool,
+    design_brief_id: str = "",
     _request_id: str = "",
 ) -> dict:
     blocked = workspace.require_confirmation(confirmed, "advanced Blender")
@@ -24,20 +26,28 @@ def create_project(
         return blocked
     if not BINARY.is_file():
         return {"ok": False, "error_code": "blender_unavailable", "error": "Blender is not installed."}
+    brief, brief_error = design_intelligence.load_brief(design_brief_id, project_name)
+    if brief_error:
+        return {"ok": False, "error_code": "design_brief_required", "error": brief_error}
     error = _validate(components, booleans)
     if error:
         return {"ok": False, "error_code": "invalid_advanced_scene", "error": error}
+    error = _validate_design(components, booleans, brief or {})
+    if error:
+        return {"ok": False, "error_code": "design_quality_gate_failed", "error": error}
     _, folder, manifest = workspace.project("Blender", project_name, _request_id)
     scene = folder / f"{manifest['project']}.blend"
     preview = folder / "preview.png"
+    review = folder / "design-review.json"
     script = folder / "orion_advanced_build.py"
     manifest.update({
         "description": description[:3000], "modeling_mode": "advanced_procedural",
         "components": components, "booleans": booleans, "world_color": world_color,
         "accent_color": accent_color, "render": bool(render),
     })
+    design_intelligence.attach(manifest, brief or {})
     workspace.progress(manifest, folder, "Compiling procedural model", 1, f"{len(components)} components and {len(booleans)} boolean relationships")
-    script.write_text(_script(components, booleans, scene, preview, world_color, accent_color, render), encoding="utf-8")
+    script.write_text(_script(components, booleans, scene, preview, review, brief or {}, world_color, accent_color, render), encoding="utf-8")
     workspace.progress(manifest, folder, "Executing advanced Blender model", 2, "Profiles, curves, terrain, modifiers, materials, and assembly")
     try:
         result = subprocess.run(
@@ -51,13 +61,17 @@ def create_project(
     except (OSError, subprocess.SubprocessError) as exc:
         return workspace.finish(manifest, folder, [scene], str(exc))
     workspace.progress(manifest, folder, "Verifying topology and render", 3, "Checking editable source and preview artifacts")
-    expected = [scene] + ([preview] if render else [])
+    expected = [scene, review] + ([preview] if render else [])
     missing = [path.name for path in expected if not path.exists() or path.stat().st_size == 0]
     finished = workspace.finish(
         manifest, folder, expected,
         f"Blender did not produce: {', '.join(missing)}." if missing else "",
     )
     if finished.get("ok"):
+        try:
+            finished["design_review"] = json.loads(review.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            finished["design_review"] = {"passed": False, "issues": ["Design review report could not be read."]}
         opened = workspace.open_project("Blender", manifest["project"])
         finished.update({"opened": bool(opened.get("ok")), "loaded": bool(opened.get("loaded")), "open_result": opened})
     return finished
@@ -92,13 +106,31 @@ def _validate(components: list[dict], booleans: list[dict]) -> str:
     return ""
 
 
+def _validate_design(components: list[dict], booleans: list[dict], brief: dict) -> str:
+    if brief.get("artifact_type") in {"functional_part", "3d_print"}:
+        return "Dimensional functional and 3D-print parts must be built in FreeCAD or OpenSCAD, not Blender alone."
+    visible = [item for item in components if item.get("role") != "cutter"]
+    if len(visible) < 12:
+        return "The selected concept needs at least 12 purposeful visible components; this specification is still a blockout."
+    operations = {str(item.get("operation")) for item in visible}
+    if len(operations) < 3 or operations == {"primitive"}:
+        return "Use at least three modeling strategies so the design is not merely assembled primitives."
+    if not any(float(item.get("bevel", 0)) > 0 or int(item.get("subdivision", 0)) > 0 for item in visible):
+        return "Resolve edge treatment with bevels or subdivision instead of leaving every form mechanically raw."
+    if any(len(str(item.get("design_intent", "")).strip()) < 12 for item in visible):
+        return "Every visible component must state which requirement or design principle it satisfies."
+    if not booleans and not any(int(item.get("array_count", 1)) > 1 for item in visible):
+        return "Use at least one real construction relationship such as a boolean or deliberate repeated system."
+    return ""
+
+
 def _script(
     components: list[dict], booleans: list[dict], scene_path: Path,
-    preview: Path, world_color: str, accent_color: str, render: bool,
+    preview: Path, review_path: Path, brief: dict, world_color: str, accent_color: str, render: bool,
 ) -> str:
     return f'''import bpy, json, math
 from mathutils import Vector
-components=json.loads({json.dumps(components)!r}); boolean_specs=json.loads({json.dumps(booleans)!r})
+components=json.loads({json.dumps(components)!r}); boolean_specs=json.loads({json.dumps(booleans)!r}); design_brief=json.loads({json.dumps(brief)!r})
 def vec(value,default): return tuple(float(v) for v in (value if isinstance(value,list) and len(value)==3 else default))
 def rgba(value):
     text=str(value or "#7DA7D9").lstrip("#")
@@ -176,7 +208,7 @@ def build(spec):
         mod=obj.modifiers.new("ORION_Array","ARRAY"); mod.count=min(int(spec["array_count"]),64); mod.use_relative_offset=False; mod.constant_offset_displace=vec(spec.get("array_offset"),(1,0,0))
     if bool(spec.get("smooth")) and obj.type=="MESH":
         for polygon in obj.data.polygons: polygon.use_smooth=True
-    obj["orion_role"]=spec.get("role","object"); obj["orion_operation"]=operation; return obj
+    obj["orion_role"]=spec.get("role","object"); obj["orion_operation"]=operation; obj["orion_design_intent"]=spec.get("design_intent",""); return obj
 bpy.ops.object.select_all(action="SELECT"); bpy.ops.object.delete(use_global=False)
 objects={{spec["name"]:build(spec) for spec in components}}
 for spec in boolean_specs:
@@ -199,4 +231,18 @@ for screen in bpy.data.screens:
         if area.type=="VIEW_3D": area.spaces.active.shading.type="MATERIAL"; area.spaces.active.region_3d.view_perspective="CAMERA"
 if {bool(render)!r}: bpy.ops.render.render(write_still=True)
 bpy.ops.wm.save_as_mainfile(filepath={str(scene_path)!r})
+visible_objects=[o for o in objects.values() if not o.hide_render and o.get("orion_role")!="cutter"]
+review={{
+    "passed": True,
+    "brief_id": design_brief.get("brief_id",""),
+    "selected_concept": design_brief.get("selected_concept",""),
+    "visible_components": len(visible_objects),
+    "modeling_operations": sorted(set(o.get("orion_operation","") for o in visible_objects)),
+    "modifier_count": sum(len(o.modifiers) for o in visible_objects),
+    "mesh_vertices": sum(len(o.data.vertices) for o in visible_objects if o.type=="MESH"),
+    "traceability": [{{"component":o.name,"design_intent":o.get("orion_design_intent","")}} for o in visible_objects],
+    "quality_gates": design_brief.get("quality_gates",[]),
+    "limitations": ["Visual composition still requires human review of the rendered preview before fabrication or publication."],
+}}
+with open({str(review_path)!r},"w",encoding="utf-8") as handle: json.dump(review,handle,indent=2)
 '''

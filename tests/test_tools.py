@@ -44,6 +44,7 @@ class ToolTests(unittest.TestCase):
                 "codex_generate", "generation_status", "generation_cancel",
                 "capability_families_status", "objective_compile", "google_drive_search",
                 "google_create_spreadsheet", "google_create_document", "google_create_presentation",
+                "design_project_plan",
                 "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "freecad_create_project",
                 "openscad_create_project", "resolve_create_project", "native_project_open",
                 "install_application", "installation_status",
@@ -60,28 +61,35 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(tools.select_definitions("Tell me a short joke"), [])
 
     def test_native_project_request_selects_dedicated_worker(self):
-        names = {definition["name"] for definition in tools.select_definitions("Create a parametric enclosure in FreeCAD")}
+        names = {definition.get("name", definition["type"]) for definition in tools.select_definitions("Create a parametric enclosure in FreeCAD")}
         self.assertIn("freecad_create_project", names)
         self.assertIn("openscad_create_project", names)
 
     def test_open_native_project_selects_exact_project_loader(self):
-        names = {definition["name"] for definition in tools.select_definitions("Open my Neon Desk Blender project")}
+        names = {definition.get("name", definition["type"]) for definition in tools.select_definitions("Open my Neon Desk Blender project")}
         self.assertIn("native_project_open", names)
 
     def test_blender_followup_context_selects_refinement_worker(self):
-        names = {definition["name"] for definition in tools.select_definitions(
+        names = {definition.get("name", definition["type"]) for definition in tools.select_definitions(
             "Add a cyan strip around that desk. Active native project: Blender NeonDust32"
         )}
         self.assertIn("blender_refine_project", names)
 
     def test_complex_blender_scene_exposes_advanced_modeler(self):
-        names = {definition["name"] for definition in tools.select_definitions(
+        names = {definition.get("name", definition["type"]) for definition in tools.select_definitions(
             "Create a detailed Blender lunar outpost with a rover and satellite dishes"
         )}
         self.assertIn("blender_create_advanced_project", names)
 
+    def test_inferred_objective_family_exposes_required_worker(self):
+        names = {definition.get("name", definition["type"]) for definition in tools.select_definitions(
+            "Build a printable enclosure for my sensor"
+        )}
+        self.assertIn("freecad_create_project", names)
+        self.assertIn("design_project_plan", names)
+
     def test_install_request_selects_native_installer(self):
-        names = {definition["name"] for definition in tools.select_definitions("Install Blender on my laptop")}
+        names = {definition.get("name", definition["type"]) for definition in tools.select_definitions("Install Blender on my laptop")}
         self.assertIn("install_application", names)
         self.assertIn("installation_status", names)
 
@@ -91,10 +99,14 @@ class ToolTests(unittest.TestCase):
 
     @patch("tools.app_installer.install", return_value={"ok": True, "status": "running"})
     def test_installer_receives_request_and_task_correlation(self, install):
-        tools.execute(
-            "install_application", {"application": "Blender", "confirmed": True},
-            context={"request_id": "request-1", "task_id": "task-1"},
-        )
+        with patch("execution_supervisor.platform") as platform, patch("execution_supervisor.snapshot", return_value={}):
+            platform.return_value.risk_for.return_value = "consequential"
+            platform.return_value.verified_execution.return_value = None
+            platform.return_value.tool_failure_window.return_value = {"failures": 0}
+            tools.execute(
+                "install_application", {"application": "Blender", "confirmed": True},
+                context={"request_id": "request-1", "task_id": "task-1"},
+            )
         install.assert_called_once_with(
             application="Blender", confirmed=True, _request_id="request-1", _task_id="task-1",
         )

@@ -1,4 +1,5 @@
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -70,6 +71,31 @@ class AgentPlatformTests(unittest.TestCase):
         failed = next(task for task in history if task["id"] == "first")
         self.assertEqual(failed["error_code"], "remote_permission_denied")
         self.assertEqual(failed["events"][0]["action"], "push")
+
+    def test_startup_recovers_unfinished_tasks_without_claiming_completion(self):
+        self.agent.begin_task("unfinished", "Create a budget", "Create and verify a budget", "sheets")
+        self.agent.record_task_event("unfinished", 1, "create", "succeeded", "Artifact created")
+        with self.agent._connect() as db:
+            db.execute("UPDATE tasks SET updated=? WHERE id='unfinished'", (time.time() - 60,))
+        recovered = self.agent.recover_interrupted_tasks(stale_after=15)
+        self.assertEqual(recovered["recovered_tasks"][0]["id"], "unfinished")
+        interrupted = self.agent.interrupted_tasks()["tasks"][0]
+        self.assertEqual(interrupted["status"], "interrupted")
+        self.assertEqual(interrupted["error_code"], "service_interrupted")
+
+    def test_verified_execution_is_found_only_for_same_request_and_arguments(self):
+        self.agent.begin_execution_checkpoint(
+            "checkpoint", "task", "request", "git_push", "consequential",
+            {"repository": "Jarvis", "confirmed": True}, {},
+        )
+        self.agent.finish_execution_checkpoint("checkpoint", "verified", {"ahead": 0}, 1)
+        match = self.agent.verified_execution(
+            "request", "git_push", {"confirmed": True, "repository": "Jarvis"},
+        )
+        self.assertEqual(match["id"], "checkpoint")
+        self.assertIsNone(self.agent.verified_execution(
+            "different-request", "git_push", {"confirmed": True, "repository": "Jarvis"},
+        ))
 
 
 if __name__ == "__main__":

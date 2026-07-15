@@ -1,5 +1,47 @@
 import AppKit
 
+final class OrionHUDPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
+final class OrionPromptTextView: NSTextView {
+    var submitHandler: (() -> Void)?
+    var cancelHandler: (() -> Void)?
+    var placeholder = "Type a command…"
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 && !event.modifierFlags.contains(.shift) {
+            submitHandler?()
+            return
+        }
+        if event.keyCode == 53 {
+            cancelHandler?()
+            return
+        }
+        super.keyDown(with: event)
+        needsDisplay = true
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        if string.isEmpty && window?.firstResponder !== self {
+            NSString(string: placeholder).draw(
+                at: NSPoint(x: 6, y: 5),
+                withAttributes: [
+                    .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+                    .foregroundColor: NSColor.white.withAlphaComponent(0.38),
+                ]
+            )
+        }
+    }
+}
+
 final class JarvisHUDView: NSView {
     var state = "planning"
     var label = "Planning…"
@@ -16,14 +58,93 @@ final class JarvisHUDView: NSView {
     private var chatMaximum: CGFloat = 0
     private var actionMaximum: CGFloat = 0
     private var animationTimer: Timer?
+    var onSubmitCommand: ((String) -> Void)?
+    var onCancelCommand: (() -> Void)?
+    var onCancelTask: (() -> Void)?
+    private let promptScroll = NSScrollView()
+    private let promptView = OrionPromptTextView()
+    private let sendButton = NSButton(title: "SEND  ↵", target: nil, action: nil)
+    private let cancelButton = NSButton(title: "STOP", target: nil, action: nil)
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        promptScroll.drawsBackground = true
+        promptScroll.backgroundColor = NSColor.black.withAlphaComponent(0.82)
+        promptScroll.borderType = .noBorder
+        promptScroll.hasVerticalScroller = true
+        promptScroll.autohidesScrollers = true
+        promptScroll.wantsLayer = true
+        promptScroll.layer?.cornerRadius = 8
+        promptScroll.layer?.borderWidth = 1
+        promptView.drawsBackground = false
+        promptView.textColor = .white
+        promptView.insertionPointColor = .systemCyan
+        promptView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        promptView.isRichText = false
+        promptView.isAutomaticQuoteSubstitutionEnabled = false
+        promptView.isAutomaticDashSubstitutionEnabled = false
+        promptView.textContainerInset = NSSize(width: 5, height: 4)
+        promptView.minSize = NSSize(width: 0, height: 42)
+        promptView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        promptView.isVerticallyResizable = true
+        promptView.isHorizontallyResizable = false
+        promptView.textContainer?.widthTracksTextView = true
+        promptView.submitHandler = { [weak self] in self?.submitCommand() }
+        promptView.cancelHandler = { [weak self] in self?.onCancelCommand?() }
+        promptScroll.documentView = promptView
+        addSubview(promptScroll)
+        sendButton.target = self
+        sendButton.action = #selector(submitCommand)
+        sendButton.isBordered = false
+        sendButton.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .bold)
+        sendButton.contentTintColor = .white
+        sendButton.wantsLayer = true
+        sendButton.layer?.cornerRadius = 8
+        addSubview(sendButton)
+        cancelButton.target = self
+        cancelButton.action = #selector(cancelTask)
+        cancelButton.isBordered = false
+        cancelButton.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .bold)
+        cancelButton.contentTintColor = .systemRed
+        cancelButton.wantsLayer = true
+        cancelButton.layer?.cornerRadius = 8
+        cancelButton.layer?.borderWidth = 1
+        cancelButton.layer?.borderColor = NSColor.systemRed.withAlphaComponent(0.65).cgColor
+        addSubview(cancelButton)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override var acceptsFirstResponder: Bool { false }
+
+    var isComposerFocused: Bool {
+        guard let responder = window?.firstResponder else { return false }
+        return responder === promptView || (responder as? NSView)?.isDescendant(of: promptScroll) == true
+    }
+
+    func focusComposer() {
+        window?.makeFirstResponder(promptView)
+    }
+
+    @objc private func submitCommand() {
+        let command = promptView.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !command.isEmpty else { NSSound.beep(); return }
+        promptView.string = ""
+        promptView.needsDisplay = true
+        onSubmitCommand?(command)
+    }
+
+    @objc private func cancelTask() {
+        onCancelTask?()
+    }
+
+    override func layout() {
+        super.layout()
+        let rect = composerRect(in: layoutRects().chat)
+        sendButton.frame = NSRect(x: rect.maxX - 92, y: rect.minY + 7, width: 82, height: rect.height - 14)
+        cancelButton.frame = NSRect(x: rect.maxX - 157, y: rect.minY + 7, width: 57, height: rect.height - 14)
+        promptScroll.frame = NSRect(x: rect.minX + 7, y: rect.minY + 7, width: rect.width - 174, height: rect.height - 14)
+    }
 
     @objc private func animate() {
         phase += 0.04
@@ -115,7 +236,11 @@ final class JarvisHUDView: NSView {
 
     private func drawConversation(_ rect: NSRect) {
         section(rect, title: "LIVE COMMAND CHANNEL", badge: messages.count > 1 ? "SCROLL" : "LIVE")
-        let viewport = NSRect(x: rect.minX + 10, y: rect.minY + 10, width: rect.width - 20, height: rect.height - 49)
+        let composer = composerRect(in: rect)
+        rounded(composer, radius: 10, fill: NSColor.black.withAlphaComponent(0.76), stroke: accent.withAlphaComponent(0.72), width: 1.2)
+        promptScroll.layer?.borderColor = accent.withAlphaComponent(isComposerFocused ? 0.95 : 0.48).cgColor
+        sendButton.layer?.backgroundColor = accent.withAlphaComponent(0.28).cgColor
+        let viewport = NSRect(x: rect.minX + 10, y: composer.maxY + 7, width: rect.width - 20, height: rect.maxY - 42 - composer.maxY - 7)
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: viewport).addClip()
         var total: CGFloat = 0
@@ -140,7 +265,7 @@ final class JarvisHUDView: NSView {
             y += height + 8
         }
         if messages.isEmpty {
-            block(goal.isEmpty ? "Say what you need. I’m listening." : cleaned(goal), in: viewport.insetBy(dx: 10, dy: 24), size: 12, color: NSColor.white.withAlphaComponent(0.78), weight: .medium)
+            block(goal.isEmpty ? "Speak or type what you need." : cleaned(goal), in: viewport.insetBy(dx: 10, dy: 24), size: 12, color: NSColor.white.withAlphaComponent(0.78), weight: .medium)
         }
         NSGraphicsContext.restoreGraphicsState()
     }
@@ -202,6 +327,11 @@ final class JarvisHUDView: NSView {
         let pathHeight = min(compact ? 155 : 235, bounds.height * 0.21)
         let path = NSRect(x: bounds.maxX - margin - pathWidth, y: margin, width: pathWidth, height: pathHeight)
         return (rail, chat, actionsRect, path)
+    }
+
+    private func composerRect(in chat: NSRect) -> NSRect {
+        let height: CGFloat = bounds.width < 1800 || bounds.height < 1000 ? 58 : 68
+        return NSRect(x: chat.minX + 10, y: chat.minY + 10, width: chat.width - 20, height: height)
     }
 
     func containsInteractivePoint(_ point: NSPoint) -> Bool {

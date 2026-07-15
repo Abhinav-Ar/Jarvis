@@ -15,7 +15,9 @@ import mac_tools
 import desktop
 import git_tools
 import project_workflow
+import anticipation
 import recovery
+import execution_supervisor
 import app_installer
 from agent_platform import platform
 
@@ -40,8 +42,9 @@ ADVANCED_BLENDER_COMPONENT = {
         "array_count": {"type": "integer"},
         "array_offset": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
         "smooth": {"type": "boolean"}, "role": {"type": "string", "enum": ["object", "cutter"]},
+        "design_intent": {"type": "string", "description": "The requirement or design principle this component exists to satisfy."},
     },
-    "required": ["name", "operation", "primitive", "profile", "path", "vertices", "faces", "dimensions", "location", "rotation", "depth", "radius", "segments", "color", "metallic", "roughness", "emission", "bevel", "subdivision", "solidify", "mirror_axis", "array_count", "array_offset", "smooth", "role"],
+    "required": ["name", "operation", "primitive", "profile", "path", "vertices", "faces", "dimensions", "location", "rotation", "depth", "radius", "segments", "color", "metallic", "roughness", "emission", "bevel", "subdivision", "solidify", "mirror_axis", "array_count", "array_offset", "smooth", "role", "design_intent"],
     "additionalProperties": False,
 }
 
@@ -631,6 +634,41 @@ TOOL_DEFINITIONS = [
         "strict": True,
     },
     {
+        "type": "function", "name": "design_project_plan",
+        "description": "Create and persist the mandatory engineering design brief for a detailed 3D, product, CAD, assembly, or 3D-print project. Use web research first, then compare three concepts and call this before any advanced modeling worker. This is a prerequisite, not a completed model.",
+        "parameters": {"type": "object", "properties": {
+            "project_name": {"type": "string"}, "intent": {"type": "string"},
+            "artifact_type": {"type": "string", "enum": ["visual_model", "product_concept", "functional_part", "3d_print", "assembly"]},
+            "intended_use": {"type": "string"},
+            "target_dimensions": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+            "units": {"type": "string", "enum": ["mm", "cm", "m"]}, "material": {"type": "string"},
+            "manufacturing_process": {"type": "string", "enum": ["visual_only", "fdm_3d_print", "resin_3d_print", "cnc", "fabrication", "general"]},
+            "requirements": {"type": "array", "minItems": 5, "maxItems": 20, "items": {"type": "string"}},
+            "constraints": {"type": "array", "minItems": 3, "maxItems": 15, "items": {"type": "string"}},
+            "precedents": {"type": "array", "minItems": 2, "maxItems": 8, "items": {"type": "object", "properties": {
+                "name": {"type": "string"}, "source_url": {"type": "string"},
+                "learned_principle": {"type": "string"}, "avoid_copying": {"type": "string"}
+            }, "required": ["name", "source_url", "learned_principle", "avoid_copying"], "additionalProperties": False}},
+            "concepts": {"type": "array", "minItems": 3, "maxItems": 5, "items": {"type": "object", "properties": {
+                "name": {"type": "string"}, "strategy": {"type": "string"}, "strengths": {"type": "string"}, "risks": {"type": "string"},
+                "function": {"type": "number", "minimum": 1, "maximum": 10},
+                "manufacturability": {"type": "number", "minimum": 1, "maximum": 10},
+                "usability": {"type": "number", "minimum": 1, "maximum": 10},
+                "visual_coherence": {"type": "number", "minimum": 1, "maximum": 10},
+                "originality": {"type": "number", "minimum": 1, "maximum": 10}
+            }, "required": ["name", "strategy", "strengths", "risks", "function", "manufacturability", "usability", "visual_coherence", "originality"], "additionalProperties": False}},
+            "selected_concept": {"type": "string"}, "selection_rationale": {"type": "string"},
+            "design_principles": {"type": "array", "minItems": 4, "maxItems": 12, "items": {"type": "string"}},
+            "print_settings": {"type": "object", "properties": {
+                "nozzle_mm": {"type": "number"}, "layer_height_mm": {"type": "number"},
+                "min_wall_mm": {"type": "number"}, "clearance_mm": {"type": "number"},
+                "max_overhang_deg": {"type": "number"}, "load_case": {"type": "string"}
+            }, "required": ["nozzle_mm", "layer_height_mm", "min_wall_mm", "clearance_mm", "max_overhang_deg", "load_case"], "additionalProperties": False},
+            "confirmed": {"type": "boolean"}
+        }, "required": ["project_name", "intent", "artifact_type", "intended_use", "target_dimensions", "units", "material", "manufacturing_process", "requirements", "constraints", "precedents", "concepts", "selected_concept", "selection_rationale", "design_principles", "print_settings", "confirmed"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
         "type": "function", "name": "blender_create_project",
         "description": "Create and verify an editable Blender project from structured geometry, materials, camera, lighting, and an optional rendered preview. Use only for an explicit project-creation request.",
         "parameters": {"type": "object", "properties": {
@@ -665,9 +703,9 @@ TOOL_DEFINITIONS = [
     },
     {
         "type": "function", "name": "blender_create_advanced_project",
-        "description": "Create a detailed editable Blender project using safe procedural modeling: explicit vertex/face topology, arbitrary 2D profile extrusion, lathe/revolve surfaces, curve tubes, procedural terrain, editable boolean relationships, arrays, mirror/solidify/bevel/subdivision modifier stacks, emission, automatic lighting, and camera framing. Prefer this over blender_create_project for products, vehicles, architecture, machinery, environments, or any scene requiring real modeled detail rather than a simple blockout.",
+        "description": "Create a detailed editable Blender project from an approved engineering design brief using safe procedural modeling: explicit vertex/face topology, profiles, revolved surfaces, curves, booleans, arrays, and modifier stacks. Use for product concepts and visual models; route dimensional printable parts to FreeCAD or OpenSCAD.",
         "parameters": {"type": "object", "properties": {
-            "project_name": {"type": "string"}, "description": {"type": "string"},
+            "project_name": {"type": "string"}, "description": {"type": "string"}, "design_brief_id": {"type": "string"},
             "components": {"type": "array", "minItems": 1, "maxItems": 120, "items": ADVANCED_BLENDER_COMPONENT},
             "booleans": {"type": "array", "maxItems": 50, "items": {"type": "object", "properties": {
                 "target": {"type": "string"}, "cutter": {"type": "string"},
@@ -675,7 +713,7 @@ TOOL_DEFINITIONS = [
             }, "required": ["target", "cutter", "operation"], "additionalProperties": False}},
             "world_color": {"type": "string"}, "accent_color": {"type": "string"},
             "render": {"type": "boolean"}, "confirmed": {"type": "boolean"}
-        }, "required": ["project_name", "description", "components", "booleans", "world_color", "accent_color", "render", "confirmed"], "additionalProperties": False},
+        }, "required": ["project_name", "description", "design_brief_id", "components", "booleans", "world_color", "accent_color", "render", "confirmed"], "additionalProperties": False},
         "strict": True,
     },
     {
@@ -691,23 +729,28 @@ TOOL_DEFINITIONS = [
         "type": "function", "name": "freecad_create_project",
         "description": "Create and verify an editable FreeCAD document containing structured parametric solids and export it as STEP or STL. Use only for an explicit CAD creation request.",
         "parameters": {"type": "object", "properties": {
-            "project_name": {"type": "string"}, "description": {"type": "string"},
+            "project_name": {"type": "string"}, "description": {"type": "string"}, "design_brief_id": {"type": "string"},
             "parts": {"type": "array", "maxItems": 100, "items": {"type": "object", "properties": {
-                "name": {"type": "string"}, "type": {"type": "string", "enum": ["box", "cylinder", "sphere", "cone"]},
+                "name": {"type": "string"}, "type": {"type": "string", "enum": ["box", "cylinder", "sphere", "cone", "profile_extrusion", "revolved_profile"]},
                 "dimensions": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
-                "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
-            }, "required": ["name", "type", "dimensions", "position"], "additionalProperties": False}},
+                "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                "rotation": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                "profile": {"type": "array", "maxItems": 64, "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}},
+                "operation": {"type": "string", "enum": ["body", "add", "cut", "intersect"]},
+                "target": {"type": "string"}, "fillet": {"type": "number"},
+                "design_intent": {"type": "string"}
+            }, "required": ["name", "type", "dimensions", "position", "rotation", "profile", "operation", "target", "fillet", "design_intent"], "additionalProperties": False}},
             "export_format": {"type": "string", "enum": ["step", "stl"]}, "confirmed": {"type": "boolean"}
-        }, "required": ["project_name", "description", "parts", "export_format", "confirmed"], "additionalProperties": False},
+        }, "required": ["project_name", "description", "design_brief_id", "parts", "export_format", "confirmed"], "additionalProperties": False},
         "strict": True,
     },
     {
         "type": "function", "name": "openscad_create_project",
         "description": "Create a self-contained editable OpenSCAD source project and compile it into a verified STL. Use for explicit code-driven parametric CAD generation.",
         "parameters": {"type": "object", "properties": {
-            "project_name": {"type": "string"}, "description": {"type": "string"},
+            "project_name": {"type": "string"}, "description": {"type": "string"}, "design_brief_id": {"type": "string"},
             "source": {"type": "string"}, "confirmed": {"type": "boolean"}
-        }, "required": ["project_name", "description", "source", "confirmed"], "additionalProperties": False},
+        }, "required": ["project_name", "description", "design_brief_id", "source", "confirmed"], "additionalProperties": False},
         "strict": True,
     },
     {
@@ -741,7 +784,7 @@ TOOL_GROUPS = {
     "capabilities": {"capability_families_status", "objective_compile"},
     "google_workspace": {"objective_compile", "google_drive_search", "google_create_spreadsheet", "google_create_document", "google_create_presentation", "browser_navigate"},
     "software": {"install_application", "installation_status"},
-    "native_projects": {"blender_create_project", "blender_refine_project", "blender_create_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open", "find_files", "open_application", "desktop_window_arrange"},
+    "native_projects": {"__web_search__", "design_project_plan", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open", "desktop_inspect", "find_files", "open_application", "desktop_window_arrange"},
 }
 
 MUTATING_TOOLS = {
@@ -756,7 +799,7 @@ MUTATING_TOOLS = {
     "memory_store", "memory_forget", "orion_teach_workflow",
     "codex_generate", "generation_cancel",
     "google_create_spreadsheet", "google_create_document", "google_create_presentation",
-    "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open",
+    "design_project_plan", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open",
     "project_session_start", "project_session_resume", "project_session_close",
 }
 
@@ -792,11 +835,22 @@ def select_definitions(request: str) -> list[dict]:
         (("what can you do", "capability", "worker families", "available workers", "adapter"), "capabilities"),
         (("google drive", "google sheet", "spreadsheet", "google doc", "google slides", "budget", "finances", "expense tracker"), "google_workspace"),
         (("install ", "download ", "is installed", "installation", "installed yet"), "software"),
-        (("blender", "freecad", "free cad", "openscad", "open scad", "davinci", "da vinci", "resolve", "3d model", "cad model", "video project", "timeline"), "native_projects"),
+        (("blender", "freecad", "free cad", "openscad", "open scad", "davinci", "da vinci", "resolve", "3d model", "cad model", "3d print", "printable", "product design", "industrial design", "video project", "timeline"), "native_projects"),
     )
     for markers, group in routes:
         if any(marker in text for marker in markers):
             selected.update(TOOL_GROUPS[group])
+    objective = anticipation.analyze(request)
+    if objective.get("action"):
+        family_routes = {
+            "git_delivery": "git", "engineering_design": "native_projects",
+            "workspace_layout": "desktop", "software_installation": "software",
+            "artifact_creation": "google_workspace", "media_playback": "spotify",
+            "application_control": "mac", "task_management": "productivity",
+        }
+        family = family_routes.get(str(objective.get("category", "")))
+        if family:
+            selected.update(TOOL_GROUPS[family])
     # Questions with no actionable signal need no tool schema at all. Current-data
     # questions keep a narrow web lane.
     if not selected and any(marker in text for marker in ("today", "current", "latest", "right now")):
@@ -941,6 +995,11 @@ def google_create_presentation(title: str, confirmed: bool) -> dict:
     return google_workspace.create_presentation(title, confirmed)
 
 
+def design_project_plan(**arguments) -> dict:
+    import design_intelligence
+    return design_intelligence.create_brief(**arguments)
+
+
 def blender_create_project(**arguments) -> dict:
     import blender_worker
     return blender_worker.create_project(**arguments)
@@ -1032,6 +1091,7 @@ def execute(name: str, arguments: dict, context: dict | None = None) -> dict:
         "google_create_spreadsheet": google_create_spreadsheet,
         "google_create_document": google_create_document,
         "google_create_presentation": google_create_presentation,
+        "design_project_plan": design_project_plan,
         "blender_create_project": blender_create_project,
         "blender_refine_project": blender_refine_project,
         "blender_create_advanced_project": blender_create_advanced_project,
@@ -1054,9 +1114,15 @@ def execute(name: str, arguments: dict, context: dict | None = None) -> dict:
             "_request_id": str(context.get("request_id", "")),
             "_task_id": str(context.get("task_id", "")),
         })
-    if name in {"blender_create_project", "blender_refine_project", "blender_create_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project"} and context:
+    if name in {"design_project_plan", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project"} and context:
         effective_arguments["_request_id"] = str(context.get("request_id", ""))
-    result = recovery.execute(name, effective_arguments, handlers[name])
+    result = execution_supervisor.execute(
+        name,
+        effective_arguments,
+        lambda: recovery.execute(name, effective_arguments, handlers[name]),
+        task_id=str((context or {}).get("task_id", "")),
+        request_id=str((context or {}).get("request_id", "")),
+    )
     if result.get("ok") and name in {"open_application", "browser_navigate"}:
         application = str(result.get("application") or result.get("browser") or arguments.get("name") or "").strip()
         if application:

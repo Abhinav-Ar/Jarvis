@@ -18,6 +18,7 @@ import sounddevice as sd
 import tools
 import activity
 import diagnostics
+import execution_supervisor
 from agent_platform import platform
 from task_engine import TaskEngine
 
@@ -50,6 +51,18 @@ or implementation steps. Ask only for a missing credential, consequential approv
 or personal value that cannot be safely inferred. For cross-family objectives,
 compile the objective, use every available family needed, and return the finished
 artifact or one precise prerequisite—not a menu of possible approaches.
+Use the supplied anticipation packet as local evidence. Expand the literal command
+into the user's likely intended outcome by completing obvious safe prerequisites,
+recovering from expected intermediate states, and verifying the result in the way a
+competent human assistant would. Consult relevant prior successes and explicit
+corrections before choosing an approach. Resolve references from the active project,
+frontmost application, recent conversation, and observed state instead of asking the
+user to repeat information ORION already has. When several interpretations remain,
+choose the lowest-risk interpretation consistent with those preferences and state;
+ask only when the choice would materially change or endanger the result. A predicted
+next intent may be prepared or suggested, but never executed if it is consequential,
+unrelated, or outside the authorized objective. Do not turn anticipation into chatter:
+mention a next step only when it is specific, useful, and grounded in repeated behavior.
 Treat a multi-part request as one persistent goal: make a short internal plan,
 execute every authorized step in order, inspect tool results, diagnose blockers,
 and continue until the requested outcome is complete or genuinely impossible.
@@ -96,22 +109,43 @@ the complete Drive artifact in one operation; the user does not need to specify
 tabs, formulas, validation, formatting, or charts. Never claim creation when Google
 authorization is unavailable, and never replace the requested Drive artifact with
 a local file unless the user agrees.
-Native creative and engineering requests must use their dedicated worker whenever
-the user explicitly asks to create a project or artifact: blender_create_advanced_project
-for products, vehicles, architecture, machinery, environments, or any detailed
-hard-surface scene; blender_create_project only for intentionally simple blockouts;
-freecad_create_project for editable parametric
-parts plus STEP/STL, openscad_create_project for self-contained source plus STL,
-and resolve_create_project for Resolve projects, media pools, and timelines. Infer
-reasonable project defaults from the objective instead of asking the user to design
-the internal scene graph. Do not claim deep project creation from merely opening or
-clicking the application. Never overwrite an existing Resolve project or import
-media outside the user's home folder.
+Native creative and engineering requests must use their dedicated workers. For any
+detailed product, 3D scene, CAD part, assembly, or printable object, behave like a
+design engineer before behaving like a modeler: use web research to study at least
+two relevant real precedents; extract transferable principles without copying a
+single design; write explicit functional requirements, constraints, target scale,
+material and process; compare three genuinely different concepts; score their
+function, manufacturability, usability, visual coherence, and originality; then call
+design_project_plan. Its brief_id is mandatory for the modeling call that follows.
+The brief is only a prerequisite and never proves the requested artifact is complete.
+Use blender_create_advanced_project for researched product concepts, vehicles,
+architecture, machinery, environments, and detailed visual models. Use
+blender_create_project only when the user explicitly wants a quick simple blockout.
+Use FreeCAD or OpenSCAD—not Blender alone—for dimensional functional parts and 3D
+prints. FreeCAD supports profiles, revolves, placements, fillets, and constructive
+booleans; OpenSCAD supports code-driven parametric solids. A printable design must
+define nozzle, layer height, minimum wall, clearance, overhang limit, material, and
+load case, and must pass the generated solid/mesh checks. If a mating dimension or
+load is safety-critical and cannot be inferred, ask one precise question instead of
+inventing it. Use resolve_create_project for Resolve projects, media pools, and
+timelines. Do not claim completion from opening or clicking an application, and do
+not overwrite an existing Resolve project or import media outside the user's home.
 For advanced Blender work, decompose every named subject into a multi-part assembly
 with primary forms, structural components, and visible secondary detail. Use profile
 extrusion, revolved profiles, curves, custom vertex/face meshes, booleans, arrays,
 and modifier stacks as appropriate. One primitive per requested noun is only a
 blockout and does not satisfy a request for a finished or detailed model.
+Every modeled component must state the requirement or principle it satisfies. Build
+primary, secondary, and tertiary form hierarchy; resolve seams, thickness, edge
+treatment, access, assembly logic, and repeated systems. Read the generated design
+review after modeling. For a detailed Blender deliverable, visually inspect the
+opened Blender result against the brief: judge silhouette, proportion, hierarchy,
+plausibility, obvious intersections, camera framing, material separation, and the
+specific requested character. If it still reads like generic primitives or a rough
+blockout, revise the specification and run the worker again rather than defending a
+weak first result. Be candid that automated
+geometry and mesh checks do not replace human visual critique, structural analysis,
+or slicer validation for a fabricated part.
 Treat colored neon/RGB/accent lighting as a physical fixture or emissive strip by
 default, with neutral general illumination. Never represent a requested light as
 an arbitrary floating sphere or color-wash every material. For a follow-up change
@@ -148,6 +182,13 @@ application name before every coordinate sequence. This activates the applicatio
 locks inspection to its physical display, and prevents clicks on another monitor.
 Never claim a tool succeeded unless its result says it did. The current local time
 is provided with each request when relevant. Do not expose internal tool syntax.
+Every tool result is supervised locally. Treat `_supervision.verified` and its
+checks as the completion evidence for that action. Never repeat a verified action.
+If `duplicate_prevented` is present, continue from the already verified state rather
+than attempting the action again. If a tool circuit is open, choose a genuinely
+different adapter or report the specific blocker; never hammer the same route.
+When a result contains `_rollback`, account for the restored state before choosing
+the next route. A cancellation ends the remaining plan but preserves completed work.
 The structured task plan supplied with the request is authoritative. Satisfy its
 success criteria, not merely its first step. Automatically perform safe reversible
 prerequisites within the user's goal. After failures, identify the unmet precondition,
@@ -242,16 +283,30 @@ class OrionAssistant:
             "update ", "remove ", "make the", "make it", "the desk", "the project",
         ))
         selection_request = request_text
+        if self.task_engine.anticipation:
+            selection_request += "\nLocally inferred objective family: " + str(self.task_engine.anticipation.get("category", ""))
         if referential and self.local_session_turns:
             selection_request += "\nRecent local turns: " + json.dumps(self.local_session_turns[-3:])
         if referential and self.active_native_project:
             selection_request += "\nActive native project: " + json.dumps(self.active_native_project)
+        explicit_interrupted_resume = any(
+            phrase in normalized_followup
+            for phrase in ("previous task", "last task", "previous workflow", "last workflow")
+        )
+        interrupted_context = (
+            local_context.get("tasks", [])
+            if explicit_interrupted_resume and isinstance(local_context, dict) else []
+        )
+        if referential and interrupted_context:
+            selection_request += "\nInterrupted or recent task to resume: " + json.dumps(interrupted_context[:1])
         selected_tools = tools.select_definitions(selection_request)
         if not selected_tools and continuation and self.last_selected_tools:
             selected_tools = self.last_selected_tools
         elif selected_tools:
             self.last_selected_tools = selected_tools
         if continuation and selected_tools and resuming_pending_action:
+            plan.requires_tools = True
+        if referential and interrupted_context and selected_tools:
             plan.requires_tools = True
         if plan.requires_tools and not selected_tools:
             answer = "I can’t perform that action yet because I don’t have an executable capability for it. I didn’t make any changes."
@@ -416,6 +471,14 @@ class OrionAssistant:
                 outputs = [run_call(call) for call in calls]
             if any(tools.is_action_evidence(name, arguments, result) for name, arguments, result in completed_calls):
                 action_effect_evidence = True
+
+            cancelled = next((result for _, _, result in completed_calls if result.get("cancelled")), None)
+            if cancelled:
+                answer = "Stopped. I left completed work in place and didn’t start the remaining steps."
+                self.task_engine.finish("cancelled")
+                execution_supervisor.clear_cancel()
+                diagnostics.event("execution_cancelled_safely", request_id=request_id)
+                return answer
 
             installation = next(
                 ((name, arguments, result) for name, arguments, result in completed_calls

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import diagnostics
+import anticipation
 
 
 RUNTIME = Path(os.getenv("ORION_RUNTIME_DIR") or os.getenv("JARVIS_RUNTIME_DIR") or Path.cwd() / ".runtime")
@@ -117,10 +118,16 @@ class OrionKernel:
                     status TEXT NOT NULL, run_after REAL NOT NULL, created REAL NOT NULL,
                     updated REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS intent_transitions (
+                    from_category TEXT NOT NULL, to_category TEXT NOT NULL,
+                    count INTEGER NOT NULL, last_seen REAL NOT NULL,
+                    PRIMARY KEY(from_category,to_category)
+                );
                 CREATE INDEX IF NOT EXISTS idx_world_expires ON world_facts(expires);
                 CREATE INDEX IF NOT EXISTS idx_memory_layer_updated ON layered_memory(layer,updated DESC);
                 CREATE INDEX IF NOT EXISTS idx_goals_status_updated ON goals(status,updated DESC);
                 CREATE INDEX IF NOT EXISTS idx_kernel_events_created ON kernel_events(created DESC);
+                CREATE INDEX IF NOT EXISTS idx_intent_transitions_from ON intent_transitions(from_category,count DESC);
             """)
         self._install_default_rules()
 
@@ -383,10 +390,48 @@ class OrionKernel:
     def stop_monitor(self) -> None:
         self._stop.set()
 
+    def recover_interrupted_goals(self) -> dict:
+        """Pause goals orphaned by a process restart so they remain resumable."""
+        now = time.time()
+        with self._lock, self._connect() as db:
+            rows = db.execute(
+                "SELECT id,request,objective,updated FROM goals WHERE status='active' ORDER BY updated DESC"
+            ).fetchall()
+            if rows:
+                db.execute("UPDATE goals SET status='paused',updated=? WHERE status='active'", (now,))
+        return {"ok": True, "goals": [dict(row) for row in rows]}
+
     def before_request(self, request: str, request_id: str, session_id: str) -> dict:
         route = IntelligenceRouter.route(request)
+        previous_request = self._working_value(f"session:{session_id}:last_request")
+        if previous_request:
+            self._record_transition(anticipation.classify(str(previous_request)), anticipation.classify(request))
         active = self.active_goal().get("goal")
-        referential = len(request.split()) <= 14 and any(word in request.lower() for word in ("it", "that", "continue", "yes", "again", "there"))
+        referential = len(request.split()) <= 14 and any(word in request.lower() for word in ("it", "that", "continue", "resume", "yes", "again", "there"))
+        resume_previous = any(
+            phrase in " ".join(request.lower().split())
+            for phrase in ("continue the previous", "continue previous", "resume the previous", "resume previous", "continue the last", "resume the last")
+        )
+        if not active and resume_previous:
+            with self._lock, self._connect() as db:
+                previous_goal = db.execute(
+                    "SELECT * FROM goals WHERE status='paused' AND updated>=? ORDER BY updated DESC LIMIT 1",
+                    (time.time() - 86400 * 7,),
+                ).fetchone()
+                if previous_goal:
+                    db.execute("UPDATE goals SET status='active',updated=? WHERE id=?", (time.time(), previous_goal["id"]))
+                    active = dict(previous_goal)
+        if not active and referential:
+            previous_goal_id = self._working_value(f"session:{session_id}:last_goal_id")
+            if previous_goal_id:
+                with self._lock, self._connect() as db:
+                    previous_goal = db.execute(
+                        "SELECT * FROM goals WHERE id=? AND updated>=?",
+                        (str(previous_goal_id), time.time() - 3600),
+                    ).fetchone()
+                    if previous_goal:
+                        db.execute("UPDATE goals SET status='active',updated=? WHERE id=?", (time.time(), str(previous_goal_id)))
+                        active = dict(previous_goal)
         if not active or not referential:
             goal = self.create_goal(request, risk="consequential" if route["consequential"] else "low")
             goal_id = goal["goal_id"]
@@ -395,6 +440,7 @@ class OrionKernel:
             with self._lock, self._connect() as db:
                 db.execute("UPDATE goals SET updated=? WHERE id=?", (time.time(), goal_id))
         self.remember("working", f"session:{session_id}:last_request", request, source="voice_session", ttl=3600)
+        self.remember("working", f"session:{session_id}:last_goal_id", goal_id, source="goal_supervisor", ttl=3600)
         self.observe("interaction.active_goal", {"goal_id": goal_id, "request": request}, "goal_supervisor", ttl=3600)
         context = self.context_for(request)
         capability_plan = context.get("capability_plan", {})
@@ -415,12 +461,20 @@ class OrionKernel:
                     (json.dumps({"request_id": request_id, "response": response[:500]}), time.time(), goal_id),
                 )
         self.remember("episodic", f"turn:{request_id}", {"request": request, "response": response, "outcome": status}, source="conversation", ttl=86400 * 90)
+        if self._is_explicit_correction(request):
+            previous = self._previous_replay_request(session_id)
+            self.remember(
+                "episodic", f"correction:{anticipation.classify(request)}:{request_id}",
+                {"previous_request": previous, "correction": request, "applied_response": response[:1200]},
+                source="explicit_user_correction", confidence=0.9, ttl=86400 * 180,
+            )
+            diagnostics.event("interaction_correction_learned", request_id=request_id, category=anticipation.classify(request))
         self.record_replay(session_id, request_id, request, response, route, goal_id, status)
         self._publish_status()
 
     def context_for(self, request: str) -> dict:
         words = [word for word in re.findall(r"[a-z0-9_-]{4,}", request.lower()) if word not in {"please", "would", "could"}]
-        memories = self.recall(" ".join(words[:4]) or request, limit=6)["matches"]
+        memories = self._relevant_memories(words, request, limit=8)
         workflow_matches = []
         request_lower = request.lower()
         with self._lock, self._connect() as db:
@@ -438,7 +492,13 @@ class OrionKernel:
             capability_plan = capability_families.compile_objective(request)
         except Exception:
             capability_plan = {}
+        objective_analysis = anticipation.analyze(request)
         return {
+            "anticipation": objective_analysis,
+            "observed_context": anticipation.probe_context(request, objective_analysis),
+            "similar_successes_and_corrections": self._similar_history(request, limit=4),
+            "likely_next_intents": self._likely_next_intents(anticipation.classify(request)),
+            "interrupted_tasks": self._interrupted_tasks(),
             "active_goal": self.active_goal(),
             "world": self.world_snapshot(limit=12)["facts"],
             "memory": memories,
@@ -446,6 +506,126 @@ class OrionKernel:
             "matched_workflows": workflow_matches[:3],
             "capability_plan": capability_plan,
         }
+
+    def _interrupted_tasks(self) -> list[dict]:
+        try:
+            with self._lock, self._connect() as db:
+                exists = db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tasks'"
+                ).fetchone()
+                if not exists:
+                    return []
+                rows = db.execute(
+                    "SELECT id,request,goal,workflow,status,result_summary,error_code,updated "
+                    "FROM tasks WHERE status='interrupted' ORDER BY updated DESC LIMIT 3"
+                ).fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error:
+            return []
+
+    def _working_value(self, key: str) -> Any:
+        with self._lock, self._connect() as db:
+            row = db.execute(
+                "SELECT value FROM layered_memory WHERE layer='working' AND key=? AND (expires IS NULL OR expires>=?)",
+                (key, time.time()),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row["value"])
+        except (ValueError, TypeError):
+            return row["value"]
+
+    def _record_transition(self, from_category: str, to_category: str) -> None:
+        if not from_category or not to_category or from_category == to_category:
+            return
+        with self._lock, self._connect() as db:
+            db.execute(
+                "INSERT INTO intent_transitions(from_category,to_category,count,last_seen) VALUES(?,?,1,?) "
+                "ON CONFLICT(from_category,to_category) DO UPDATE SET count=count+1,last_seen=excluded.last_seen",
+                (from_category, to_category, time.time()),
+            )
+
+    def _likely_next_intents(self, category: str, limit: int = 3) -> list[dict]:
+        with self._lock, self._connect() as db:
+            rows = db.execute(
+                "SELECT to_category,count,last_seen FROM intent_transitions "
+                "WHERE from_category=? AND count>=2 ORDER BY count DESC,last_seen DESC LIMIT ?",
+                (category, limit),
+            ).fetchall()
+        total = sum(int(row["count"]) for row in rows)
+        return [
+            {
+                "intent": row["to_category"], "observations": int(row["count"]),
+                "confidence": round(int(row["count"]) / max(1, total), 2),
+                "policy": "prepare or suggest only; do not execute without scope or authorization",
+            }
+            for row in rows
+        ]
+
+    def _relevant_memories(self, words: list[str], request: str, limit: int) -> list[dict]:
+        matches: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for term in (words[:6] or [request]):
+            for item in self.recall(term, limit=limit)["matches"]:
+                identity = (str(item.get("layer", "")), str(item.get("key", "")))
+                if identity not in seen:
+                    seen.add(identity)
+                    matches.append(item)
+        matches.sort(key=lambda item: (float(item.get("confidence", 0)), float(item.get("updated", 0))), reverse=True)
+        return matches[:limit]
+
+    @staticmethod
+    def _tokens(value: str) -> set[str]:
+        stop = {"please", "could", "would", "about", "there", "their", "with", "from", "that", "this", "have", "want", "into"}
+        return {word for word in re.findall(r"[a-z0-9_-]{4,}", value.lower()) if word not in stop}
+
+    def _similar_history(self, request: str, limit: int = 4) -> list[dict]:
+        target = self._tokens(request)
+        category = anticipation.classify(request)
+        if not target:
+            return []
+        with self._lock, self._connect() as db:
+            rows = db.execute(
+                "SELECT request,response,outcome,created FROM replay_turns "
+                "WHERE outcome IN ('completed','awaiting_input') ORDER BY created DESC LIMIT 80"
+            ).fetchall()
+        scored = []
+        for row in rows:
+            candidate = self._tokens(str(row["request"]))
+            overlap = len(target & candidate)
+            if overlap == 0:
+                continue
+            score = overlap / max(1, len(target | candidate))
+            if anticipation.classify(str(row["request"])) == category:
+                score += 0.2
+            scored.append((score, row))
+        scored.sort(key=lambda item: (item[0], float(item[1]["created"])), reverse=True)
+        return [
+            {
+                "request": str(row["request"])[:500], "result": str(row["response"])[:800],
+                "outcome": row["outcome"], "relevance": round(score, 2),
+            }
+            for score, row in scored[:limit] if score >= 0.28
+        ]
+
+    @staticmethod
+    def _is_explicit_correction(request: str) -> bool:
+        text = " ".join(request.lower().split())
+        markers = (
+            "no,", "no ", "i said", "i asked", "i wanted", "instead of", "not what i",
+            "you should have", "don't do", "do not do", "that wasn't", "that was not",
+            "it should", "it needs to", "i prefer",
+        )
+        return 4 <= len(text.split()) <= 120 and any(marker in text for marker in markers)
+
+    def _previous_replay_request(self, session_id: str) -> str:
+        with self._lock, self._connect() as db:
+            row = db.execute(
+                "SELECT request FROM replay_turns WHERE session_id=? ORDER BY created DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        return str(row["request"]) if row else ""
 
     def record_replay(self, session_id: str, request_id: str, request: str, response: str, route: dict, goal_id: str, outcome: str) -> None:
         safe_request = str(diagnostics.redact(request))[:4000]
@@ -519,6 +699,10 @@ def kernel() -> OrionKernel:
 
 
 def initialize_kernel() -> OrionKernel:
-    instance = kernel(); instance.start_monitor()
+    instance = kernel()
+    recovered = instance.recover_interrupted_goals()
+    if recovered.get("goals"):
+        diagnostics.event("interrupted_goals_paused", goals=len(recovered["goals"]))
+    instance.start_monitor()
     instance.observe("agent.identity", {"name": "ORION", "expansion": "One Really Intelligent Operating Network"}, "configuration", ttl=None)
     return instance

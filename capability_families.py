@@ -72,8 +72,8 @@ def families() -> dict[str, Family]:
             creative, "native_adapter", "Install and authorize a supported creative application" if not creative else "",
         ),
         "engineering": Family(
-            "Engineering and CAD", "Parametric CAD, drawings, simulation, slicing, rendering, and validation.",
-            ("cad.model", "cad.drawing", "simulation.run", "dimensions.verify", "render.preview"),
+            "Engineering and CAD", "Precedent research, requirements, concept selection, parametric CAD, printability, rendering, and validation.",
+            ("design.research", "design.brief", "concept.compare", "cad.model", "cad.drawing", "manufacturing.validate", "dimensions.verify", "render.preview"),
             ("cad", "model", "part", "assembly", "drawing", "simulation", "engineering", "3d print", "freecad", "free cad", "openscad", "open scad", "blender"),
             cad, "application_api", "Install a supported CAD application with scripting/API access" if not cad else "",
         ),

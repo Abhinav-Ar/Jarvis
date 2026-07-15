@@ -87,11 +87,20 @@ class AgentPlatform:
                     evidence TEXT NOT NULL DEFAULT '{}', created REAL NOT NULL,
                     FOREIGN KEY(task_id) REFERENCES tasks(id)
                 );
+                CREATE TABLE IF NOT EXISTS execution_checkpoints (
+                    id TEXT PRIMARY KEY, task_id TEXT NOT NULL DEFAULT '',
+                    request_id TEXT NOT NULL DEFAULT '', tool TEXT NOT NULL,
+                    risk TEXT NOT NULL, arguments TEXT NOT NULL DEFAULT '{}',
+                    before_state TEXT NOT NULL DEFAULT '{}', after_state TEXT NOT NULL DEFAULT '{}',
+                    status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+                    error_code TEXT NOT NULL DEFAULT '', created REAL NOT NULL, updated REAL NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS idx_jobs_ready ON jobs(status, run_after);
                 CREATE INDEX IF NOT EXISTS idx_cloud_created ON cloud_usage(created);
                 CREATE INDEX IF NOT EXISTS idx_project_active ON project_sessions(status, updated);
                 CREATE INDEX IF NOT EXISTS idx_tasks_updated ON tasks(updated DESC);
                 CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(task_id, id);
+                CREATE INDEX IF NOT EXISTS idx_execution_checkpoints_task ON execution_checkpoints(task_id, updated DESC);
             """)
         self.write_status()
 
@@ -180,10 +189,15 @@ class AgentPlatform:
                 "ORDER BY modified DESC LIMIT ?", (*parameters, limit),
             ).fetchall()
             tasks = []
-            if any(marker in request.lower() for marker in ("what happened", "problem", "failed", "failure", "last task", "previous task", "logs")):
+            if any(marker in request.lower() for marker in ("what happened", "problem", "failed", "failure", "last task", "previous task", "continue", "resume", "logs")):
+                resume_interrupted = any(
+                    marker in request.lower()
+                    for marker in ("continue the previous", "continue previous", "resume the previous", "resume previous", "continue the last", "resume the last")
+                )
                 task_rows = db.execute(
                     "SELECT id,request,goal,status,result_summary,error_code,updated FROM tasks "
-                    "ORDER BY updated DESC LIMIT 3"
+                    + ("WHERE status='interrupted' " if resume_interrupted else "")
+                    + "ORDER BY updated DESC LIMIT 3"
                 ).fetchall()
                 for task in task_rows:
                     item = dict(task)
@@ -257,6 +271,139 @@ class AgentPlatform:
             )
         self.write_status()
         return {"ok": bool(cursor.rowcount), "task_id": task_id, "status": status}
+
+    def begin_execution_checkpoint(
+        self, checkpoint_id: str, task_id: str, request_id: str, tool: str,
+        risk: str, arguments: dict[str, Any], before_state: dict[str, Any],
+    ) -> dict:
+        now = time.time()
+        with _lock, self._connect() as db:
+            db.execute(
+                "INSERT OR REPLACE INTO execution_checkpoints("
+                "id,task_id,request_id,tool,risk,arguments,before_state,status,attempts,created,updated"
+                ") VALUES(?,?,?,?,?,?,?,'prepared',0,?,?)",
+                (
+                    checkpoint_id, task_id[:100], request_id[:100], tool[:100], risk[:40],
+                    json.dumps(diagnostics.redact(arguments), default=str)[:12000],
+                    json.dumps(diagnostics.redact(before_state), default=str)[:12000], now, now,
+                ),
+            )
+        return {"ok": True, "checkpoint_id": checkpoint_id}
+
+    def finish_execution_checkpoint(
+        self, checkpoint_id: str, status: str, after_state: dict[str, Any],
+        attempts: int, error_code: str = "",
+    ) -> dict:
+        with _lock, self._connect() as db:
+            cursor = db.execute(
+                "UPDATE execution_checkpoints SET status=?,after_state=?,attempts=?,error_code=?,updated=? WHERE id=?",
+                (
+                    status[:40], json.dumps(diagnostics.redact(after_state), default=str)[:12000],
+                    max(0, int(attempts)), error_code[:100], time.time(), checkpoint_id,
+                ),
+            )
+        self.write_status()
+        return {"ok": bool(cursor.rowcount), "checkpoint_id": checkpoint_id, "status": status}
+
+    def recent_execution_checkpoints(self, task_id: str = "", limit: int = 20) -> dict:
+        limit = max(1, min(int(limit), 100))
+        with _lock, self._connect() as db:
+            if task_id:
+                rows = db.execute(
+                    "SELECT * FROM execution_checkpoints WHERE task_id=? ORDER BY updated DESC LIMIT ?",
+                    (task_id, limit),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT * FROM execution_checkpoints ORDER BY updated DESC LIMIT ?", (limit,),
+                ).fetchall()
+        return {"ok": True, "checkpoints": [dict(row) for row in rows]}
+
+    @staticmethod
+    def _execution_arguments(arguments: dict[str, Any]) -> str:
+        return json.dumps(diagnostics.redact(arguments), default=str, sort_keys=True, separators=(",", ":"))[:12000]
+
+    def verified_execution(
+        self, request_id: str, tool: str, arguments: dict[str, Any],
+        maximum_age: float = 3600,
+    ) -> dict | None:
+        """Find the same verified action inside one user request."""
+        if not request_id:
+            return None
+        encoded = self._execution_arguments(arguments)
+        with _lock, self._connect() as db:
+            rows = db.execute(
+                "SELECT id,task_id,tool,risk,arguments,after_state,attempts,updated "
+                "FROM execution_checkpoints WHERE request_id=? AND tool=? AND status='verified' "
+                "AND updated>=? ORDER BY updated DESC LIMIT 20",
+                (request_id, tool, time.time() - max(1, float(maximum_age))),
+            ).fetchall()
+        for row in rows:
+            try:
+                prior = json.dumps(json.loads(row["arguments"]), default=str, sort_keys=True, separators=(",", ":"))
+            except (ValueError, TypeError):
+                prior = str(row["arguments"])
+            if prior == encoded:
+                item = dict(row)
+                try:
+                    item["after_state"] = json.loads(item["after_state"])
+                except (ValueError, TypeError):
+                    pass
+                return item
+        return None
+
+    def tool_failure_window(self, tool: str, seconds: float = 120) -> dict:
+        with _lock, self._connect() as db:
+            rows = db.execute(
+                "SELECT error_code,updated FROM execution_checkpoints "
+                "WHERE tool=? AND status='failed' AND updated>=? ORDER BY updated DESC LIMIT 5",
+                (tool, time.time() - max(1, float(seconds))),
+            ).fetchall()
+        return {
+            "tool": tool, "failures": len(rows),
+            "latest_error_code": str(rows[0]["error_code"]) if rows else "",
+            "cooldown_seconds": max(1, int(seconds)),
+        }
+
+    def recover_interrupted_tasks(self, stale_after: float = 15) -> dict:
+        """Turn crash/restart leftovers into explicit resumable state."""
+        now = time.time()
+        cutoff = now - max(0, float(stale_after))
+        with _lock, self._connect() as db:
+            tasks = db.execute(
+                "SELECT id,request,goal,workflow,status,updated FROM tasks "
+                "WHERE status IN ('planned','executing') AND updated<=? ORDER BY updated DESC",
+                (cutoff,),
+            ).fetchall()
+            if tasks:
+                db.execute(
+                    "UPDATE tasks SET status='interrupted',result_summary=?,error_code='service_interrupted',updated=? "
+                    "WHERE status IN ('planned','executing') AND updated<=?",
+                    ("ORION restarted before this task reached verified completion.", now, cutoff),
+                )
+            checkpoints = db.execute(
+                "SELECT id FROM execution_checkpoints WHERE status='prepared' AND updated<=?", (cutoff,),
+            ).fetchall()
+            if checkpoints:
+                db.execute(
+                    "UPDATE execution_checkpoints SET status='interrupted',error_code='service_interrupted',updated=? "
+                    "WHERE status='prepared' AND updated<=?", (now, cutoff),
+                )
+        if tasks or checkpoints:
+            self.write_status()
+        return {
+            "ok": True, "recovered_tasks": [dict(row) for row in tasks],
+            "recovered_checkpoints": len(checkpoints),
+        }
+
+    def interrupted_tasks(self, limit: int = 5) -> dict:
+        with _lock, self._connect() as db:
+            rows = db.execute(
+                "SELECT id,request,goal,workflow,status,result_summary,error_code,updated FROM tasks "
+                "WHERE status='interrupted' ORDER BY updated DESC LIMIT ?",
+                (max(1, min(int(limit), 20)),),
+            ).fetchall()
+        return {"ok": True, "tasks": [dict(row) for row in rows]}
 
     def recent_tasks(self, limit: int = 5, query: str = "") -> dict:
         limit = max(1, min(int(limit), 20))
@@ -366,8 +513,9 @@ class AgentPlatform:
             "create_email_draft", "git_commit", "git_commit_and_push", "git_push",
             "desktop_action", "desktop_accessibility_set", "desktop_accessibility_press",
             "install_application",
-            "blender_create_project", "freecad_create_project",
-            "openscad_create_project", "resolve_create_project",
+            "blender_create_project", "blender_create_advanced_project", "blender_refine_project",
+            "freecad_create_project", "openscad_create_project", "resolve_create_project",
+            "design_project_plan",
         }:
             return "consequential"
         if tool in {"desktop_window_arrange", "desktop_window_restore"}:
@@ -388,6 +536,8 @@ class AgentPlatform:
                 "workflows": db.execute("SELECT COUNT(*) FROM workflows WHERE enabled=1").fetchone()[0],
                 "queued_jobs": db.execute("SELECT COUNT(*) FROM jobs WHERE status='queued'").fetchone()[0],
                 "task_history": db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0],
+                "execution_checkpoints": db.execute("SELECT COUNT(*) FROM execution_checkpoints").fetchone()[0],
+                "interrupted_tasks": db.execute("SELECT COUNT(*) FROM tasks WHERE status='interrupted'").fetchone()[0],
                 "capabilities": db.execute("SELECT COUNT(*) FROM capabilities WHERE available=1").fetchone()[0],
                 "capability_families_available": db.execute("SELECT COUNT(*) FROM capabilities WHERE name LIKE 'family:%' AND available=1").fetchone()[0],
                 "capability_families_total": db.execute("SELECT COUNT(*) FROM capabilities WHERE name LIKE 'family:%'").fetchone()[0],
@@ -436,6 +586,13 @@ def platform() -> AgentPlatform:
 
 def initialize_platform() -> AgentPlatform:
     agent = platform()
+    recovered = agent.recover_interrupted_tasks()
+    if recovered.get("recovered_tasks") or recovered.get("recovered_checkpoints"):
+        diagnostics.event(
+            "interrupted_execution_recovered",
+            tasks=len(recovered.get("recovered_tasks", [])),
+            checkpoints=int(recovered.get("recovered_checkpoints", 0)),
+        )
     local = {
         "mac_control": (True, "Native macOS tools"),
         "persistent_memory": (True, str(agent.database)),

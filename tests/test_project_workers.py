@@ -58,15 +58,51 @@ class NativeProjectWorkerTests(unittest.TestCase):
 
             def compile_model(command, **kwargs):
                 output = Path(command[command.index("-o") + 1])
-                output.write_bytes(b"solid orion\nendsolid orion\n")
+                output.write_text("""solid orion
+facet normal 0 0 1
+ outer loop
+  vertex 0 0 0
+  vertex 0 1 0
+  vertex 1 0 0
+ endloop
+endfacet
+facet normal 0 1 0
+ outer loop
+  vertex 0 0 0
+  vertex 1 0 0
+  vertex 0 0 1
+ endloop
+endfacet
+facet normal 1 0 0
+ outer loop
+  vertex 0 0 0
+  vertex 0 0 1
+  vertex 0 1 0
+ endloop
+endfacet
+facet normal 1 1 1
+ outer loop
+  vertex 1 0 0
+  vertex 0 1 0
+  vertex 0 0 1
+ endloop
+endfacet
+endsolid orion
+""")
                 return Mock(returncode=0, stdout="Geometry cache size: 1")
 
             with (
                 patch.object(project_workspace, "ROOT", root),
                 patch.object(openscad_worker, "BINARY", Path(__file__)),
+                patch("openscad_worker.design_intelligence.load_brief", return_value=({
+                    "brief_id": "abc123abc123", "selected_concept": "Test",
+                    "quality_gates": [], "print_settings": {}, "artifact_type": "3d_print",
+                    "manufacturing_process": "fdm_3d_print", "design_principles": [],
+                }, "")),
                 patch("openscad_worker.subprocess.run", side_effect=compile_model),
                 patch("project_workspace.activity.update_background_task"),
                 patch("project_workspace.diagnostics.event"),
+                patch("project_workspace.open_project", return_value={"ok": True, "loaded": True}),
             ):
                 result = openscad_worker.create_project("Phone Stand", "A stand", "cube([10,20,3]);", True)
             self.assertTrue(result["ok"])

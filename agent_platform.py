@@ -277,6 +277,32 @@ class AgentPlatform:
         risk: str, arguments: dict[str, Any], before_state: dict[str, Any],
     ) -> dict:
         now = time.time()
+        safe_arguments = diagnostics.redact(arguments)
+        encoded_arguments = json.dumps(safe_arguments, default=str)
+        if len(encoded_arguments) > 12000 and isinstance(safe_arguments, dict):
+            components = safe_arguments.get("components", [])
+            compact = {key: value for key, value in safe_arguments.items() if key not in {"components", "booleans"}}
+            compact.update({
+                "_full_arguments_omitted": True,
+                "component_count": len(components) if isinstance(components, list) else 0,
+                "component_summaries_included": min(40, len(components)) if isinstance(components, list) else 0,
+                "boolean_count": len(safe_arguments.get("booleans", [])) if isinstance(safe_arguments.get("booleans"), list) else 0,
+                "component_summary": [
+                    {
+                        "name": item.get("name", ""), "operation": item.get("operation", ""),
+                        "primitive": item.get("primitive", ""), "collection": item.get("collection", ""),
+                        "location": item.get("location", []), "rotation": item.get("rotation", []),
+                        "array_count": item.get("array_count", 1),
+                        "vertices": len(item.get("vertices", [])), "faces": len(item.get("faces", [])),
+                    }
+                    for item in components[:40] if isinstance(item, dict)
+                ],
+            })
+            encoded_arguments = json.dumps(compact, default=str)
+            if len(encoded_arguments) > 12000:
+                compact["component_summary"] = compact["component_summary"][:20]
+                compact["component_summaries_included"] = len(compact["component_summary"])
+                encoded_arguments = json.dumps(compact, default=str)
         with _lock, self._connect() as db:
             db.execute(
                 "INSERT OR REPLACE INTO execution_checkpoints("
@@ -284,7 +310,7 @@ class AgentPlatform:
                 ") VALUES(?,?,?,?,?,?,?,'prepared',0,?,?)",
                 (
                     checkpoint_id, task_id[:100], request_id[:100], tool[:100], risk[:40],
-                    json.dumps(diagnostics.redact(arguments), default=str)[:12000],
+                    encoded_arguments,
                     json.dumps(diagnostics.redact(before_state), default=str)[:12000], now, now,
                 ),
             )
@@ -513,7 +539,7 @@ class AgentPlatform:
             "create_email_draft", "git_commit", "git_commit_and_push", "git_push",
             "desktop_action", "desktop_accessibility_set", "desktop_accessibility_press",
             "install_application",
-            "blender_create_project", "blender_create_advanced_project", "blender_refine_project",
+            "blender_create_project", "blender_create_advanced_project", "blender_resume_advanced_project", "blender_refine_project",
             "freecad_create_project", "openscad_create_project", "resolve_create_project",
             "design_project_plan",
         }:

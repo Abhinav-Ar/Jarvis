@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 
 import project_workspace as workspace
+import execution_supervisor
 
 
 BINARY = Path("/Applications/Blender.app/Contents/MacOS/Blender")
@@ -52,7 +53,10 @@ def create_project(
         encoding="utf-8",
     )
     workspace.progress(manifest, folder, "Generating native Blender scene", 2, "Geometry, bevels, materials, practical lights, camera, and render")
-    result = _run_blender(["--background", "--python", str(script)], folder / "worker.log")
+    result = _run_blender(["--background", "--python", str(script)], folder / "worker.log", _request_id)
+    if result.get("cancelled"):
+        finished = workspace.finish(manifest, folder, [scene], "Cancelled by the user before Blender finished.")
+        return {**finished, "ok": False, "cancelled": True, "error_code": "task_cancelled", "error": "Blender generation was cancelled."}
     if result.get("error"):
         return workspace.finish(manifest, folder, [scene], result["error"])
     workspace.progress(manifest, folder, "Verifying editable project", 3, "Checking .blend and final preview")
@@ -99,7 +103,10 @@ def refine_project(
         encoding="utf-8",
     )
     workspace.progress(manifest, folder, "Applying project refinement", 2, description[:180])
-    result = _run_blender(["--background", str(scene), "--python", str(script)], folder / "refine-worker.log")
+    result = _run_blender(["--background", str(scene), "--python", str(script)], folder / "refine-worker.log", _request_id)
+    if result.get("cancelled"):
+        finished = workspace.finish(manifest, folder, [scene, backup], "Cancelled by the user before refinement finished.")
+        return {**finished, "ok": False, "cancelled": True, "error_code": "task_cancelled", "error": "Blender refinement was cancelled.", "backup": str(backup)}
     if result.get("error"):
         return workspace.finish(manifest, folder, [scene], result["error"])
     workspace.progress(manifest, folder, "Verifying refined project", 3, "Checking editable source and refreshed preview")
@@ -114,18 +121,20 @@ def refine_project(
     return _open_finished(finished, str(located["project"]))
 
 
-def _run_blender(arguments: list[str], log_path: Path) -> dict:
+def _run_blender(arguments: list[str], log_path: Path, request_id: str = "") -> dict:
+    result = execution_supervisor.run_cancellable_process(
+        [str(BINARY), *arguments], request_id=request_id, timeout=600,
+    )
     try:
-        result = subprocess.run(
-            [str(BINARY), *arguments], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, timeout=600, check=False,
-        )
-        log_path.write_text(result.stdout[-50000:], encoding="utf-8")
-        if result.returncode != 0 or "Traceback (most recent call last)" in result.stdout:
-            return {"error": f"Blender exited with status {result.returncode}."}
-        return {"error": ""}
-    except (OSError, subprocess.SubprocessError) as exc:
-        return {"error": str(exc)}
+        log_path.write_text(str(result.get("stdout", ""))[-50000:], encoding="utf-8")
+    except OSError:
+        pass
+    if result.get("cancelled"):
+        return {"error": "Blender was cancelled.", "cancelled": True}
+    output = str(result.get("stdout", ""))
+    if not result.get("ok") or "Traceback (most recent call last)" in output:
+        return {"error": str(result.get("error") or f"Blender exited with status {result.get('returncode')}.")}
+    return {"error": ""}
 
 
 def _open_finished(finished: dict, project_name: str) -> dict:

@@ -46,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var luminanceSampling = false
     private var recordedMissingScreenPermission = false
     private weak var applicationBeforeTextInput: NSRunningApplication?
+    private var textInputActive = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -321,7 +322,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         let visible = FileManager.default.fileExists(atPath: sessionUIFile.path)
             && ["session", "transcribing", "planning", "working", "verifying", "speaking", "needs_input", "error"].contains(state)
         if !visible {
+            textInputActive = false
             hudView?.setAnimating(false)
+            hud?.ignoresMouseEvents = true
             hud?.orderOut(nil)
             return
         }
@@ -426,7 +429,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         }
         let screen = targetScreen()
         let compact = screen.visibleFrame.width < 1500
-        let size = NSSize(width: compact ? 338 : 414, height: compact ? 92 : 104)
+        let size = NSSize(width: compact ? 390 : 500, height: compact ? 108 : 124)
         let margin: CGFloat = compact ? 12 : 18
         let frame = NSRect(
             x: screen.visibleFrame.maxX - size.width - margin,
@@ -470,12 +473,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             hud?.ignoresMouseEvents = true
             return
         }
-        if view.isComposerFocused {
-            panel.ignoresMouseEvents = false
-        } else {
-            let local = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
-            panel.ignoresMouseEvents = !view.containsInteractivePoint(local)
+        guard textInputActive else {
+            panel.ignoresMouseEvents = true
+            return
         }
+        let local = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
+        panel.ignoresMouseEvents = !view.containsComposerPoint(local)
     }
 
     private func writeActivityState(_ state: String, _ label: String, _ detail: String) {
@@ -509,6 +512,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         refreshStatus()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
             guard let self, let panel = self.hud else { return }
+            self.textInputActive = true
             panel.ignoresMouseEvents = false
             NSApp.activate(ignoringOtherApps: true)
             panel.makeKeyAndOrderFront(nil)
@@ -537,17 +541,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     }
 
     private func restoreFocusAfterTextInput() {
+        textInputActive = false
+        hud?.ignoresMouseEvents = true
         hud?.makeFirstResponder(nil)
         hud?.resignKey()
         applicationBeforeTextInput?.activate(options: [])
     }
 
     @objc private func cancelCurrentTask() {
+        var currentState = ""
+        if let data = try? Data(contentsOf: activityFile),
+           let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            currentState = value["state"] as? String ?? ""
+        }
+        let cancellableStates = ["planning", "working", "verifying", "transcribing"]
+        guard cancellableStates.contains(currentState) else {
+            writeActivityState("session", "Nothing to stop", "ORION is waiting for your next command")
+            refreshStatus()
+            return
+        }
         let payload: [String: Any] = ["source": "menu_or_hud", "created": Date().timeIntervalSince1970]
         if let data = try? JSONSerialization.data(withJSONObject: payload) {
             try? data.write(to: cancelTaskFile, options: .atomic)
         }
-        writeActivityState("working", "Stopping safely…", "ORION will stop before the next action")
+        writeActivityState("session", "Cancelling…", "Stopping the active operation and preserving completed work")
         refreshStatus()
     }
 

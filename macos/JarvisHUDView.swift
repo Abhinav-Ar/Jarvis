@@ -11,6 +11,16 @@ final class OrionPromptTextView: NSTextView {
     var placeholder = "Type a command…"
 
     override func keyDown(with event: NSEvent) {
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command),
+           let key = event.charactersIgnoringModifiers?.lowercased() {
+            switch key {
+            case "c": copy(nil); return
+            case "v": paste(nil); needsDisplay = true; return
+            case "x": cut(nil); needsDisplay = true; return
+            case "a": selectAll(nil); return
+            default: break
+            }
+        }
         if event.keyCode == 36 && !event.modifierFlags.contains(.shift) {
             submitHandler?()
             return
@@ -334,9 +344,8 @@ final class JarvisHUDView: NSView {
         return NSRect(x: chat.minX + 10, y: chat.minY + 10, width: chat.width - 20, height: height)
     }
 
-    func containsInteractivePoint(_ point: NSPoint) -> Bool {
-        let rects = layoutRects()
-        return rects.chat.contains(point) || rects.actions.contains(point)
+    func containsComposerPoint(_ point: NSPoint) -> Bool {
+        composerRect(in: layoutRects().chat).contains(point)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -483,13 +492,16 @@ final class JarvisTaskCapsuleView: NSView {
         let elapsedText = String(format: "%02d:%02d", elapsed / 60, elapsed % 60)
         drawText("ORION // BACKGROUND", at: NSPoint(x: left, y: bounds.maxY - 23), size: compact ? 8 : 9, color: a, weight: .bold)
         drawText(elapsedText, at: NSPoint(x: bounds.maxX - (compact ? 49 : 57), y: bounds.maxY - 23), size: compact ? 8 : 9, color: .white.withAlphaComponent(0.58), weight: .medium)
-        drawText(shortened(title, limit: compact ? 24 : 29), at: NSPoint(x: left, y: bounds.maxY - (compact ? 43 : 47)), size: compact ? 11 : 12.5, color: .white, weight: .bold)
+        drawText(shortened(title, limit: compact ? 29 : 38), at: NSPoint(x: left, y: bounds.maxY - (compact ? 43 : 47)), size: compact ? 11 : 12.5, color: .white, weight: .bold)
         let phaseText = status == "completed" ? "✓ \(phaseLabel)" : status == "failed" ? "! \(phaseLabel)" : "› \(phaseLabel)"
-        drawText(shortened(phaseText, limit: compact ? 39 : 48), at: NSPoint(x: left, y: bounds.maxY - (compact ? 59 : 67)), size: compact ? 8.2 : 9.3, color: a, weight: .medium)
+        drawText(shortened(phaseText, limit: compact ? 47 : 62), at: NSPoint(x: left, y: bounds.maxY - (compact ? 59 : 67)), size: compact ? 8.2 : 9.3, color: a, weight: .medium)
+        if !detail.isEmpty {
+            drawText(shortened(detail, limit: compact ? 50 : 70), at: NSPoint(x: left, y: bounds.maxY - (compact ? 75 : 85)), size: compact ? 7.2 : 8.0, color: .white.withAlphaComponent(0.62))
+        }
 
         let segments = max(1, totalSteps)
         let barX = left
-        let barY: CGFloat = compact ? 13 : 15
+        let barY: CGFloat = compact ? 12 : 14
         let gap: CGFloat = 4
         let barWidth = bounds.maxX - barX - 15
         let width = (barWidth - CGFloat(segments - 1) * gap) / CGFloat(segments)

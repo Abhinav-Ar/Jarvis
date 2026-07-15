@@ -1,5 +1,7 @@
 import os
 import tempfile
+import threading
+import time
 import unittest
 import wave
 from pathlib import Path
@@ -10,6 +12,7 @@ os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 from assist import JarvisAssistant
 from task_engine import TaskPlan
+import execution_supervisor
 
 
 class FakeResponses:
@@ -97,6 +100,23 @@ class AssistantTests(unittest.TestCase):
 
         self.assertEqual(assistant.ask("Hello"), "Hello, Sir.")
         self.assertEqual(assistant.previous_response_id, "r1")
+
+    def test_stop_returns_during_cloud_wait_without_using_late_response(self):
+        assistant = JarvisAssistant()
+        assistant._cloud_response = lambda *args, **kwargs: (time.sleep(3), object())[1]
+        with tempfile.TemporaryDirectory() as folder, (
+            patch.object(execution_supervisor, "CANCEL_FILE", Path(folder) / "cancel-current-task")
+        ):
+            timer = threading.Timer(0.15, lambda: execution_supervisor.request_cancel("request", source="test"))
+            timer.start()
+            started = time.monotonic()
+            try:
+                result = assistant._cloud_response_cancellable("assistant", "request")
+            finally:
+                timer.cancel()
+                execution_supervisor.clear_cancel()
+        self.assertIsNone(result)
+        self.assertLess(time.monotonic() - started, 1.5)
 
     def test_short_followup_reuses_active_tool_lane(self):
         answer = SimpleNamespace(id="r2", output=[], output_text="Continuing.")

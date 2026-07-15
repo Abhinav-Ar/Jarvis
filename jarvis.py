@@ -143,6 +143,7 @@ def main() -> int:
     session_id = uuid.uuid4().hex
     start_desktop_control()
     activity.reset_ui()
+    execution_supervisor.clear_cancel()
     from assist import OrionAssistant
     assistant = OrionAssistant()
     recorder = None

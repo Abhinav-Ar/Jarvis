@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import signal
+import subprocess
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -51,7 +54,10 @@ def request_cancel(request_id: str = "", source: str = "user") -> dict:
 
 
 def clear_cancel() -> None:
-    CANCEL_FILE.unlink(missing_ok=True)
+    try:
+        CANCEL_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def cancellation_requested(request_id: str = "") -> bool:
@@ -60,6 +66,67 @@ def cancellation_requested(request_id: str = "") -> bool:
     payload = _read_json(CANCEL_FILE)
     target = str(payload.get("request_id", "")) if payload else ""
     return not target or not request_id or target == request_id
+
+
+def run_cancellable_process(
+    command: list[str], *, request_id: str = "", timeout: float = 900,
+    cwd: str | None = None, progress_callback: Callable[[], None] | None = None,
+) -> dict:
+    """Run a worker in its own process group and cooperatively stop it."""
+    started = time.monotonic()
+    try:
+        with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as output:
+            process = subprocess.Popen(
+                command, stdout=output, stderr=subprocess.STDOUT, text=True,
+                cwd=cwd, start_new_session=True,
+            )
+            cancelled = False
+            timed_out = False
+            last_progress = 0.0
+            while process.poll() is None:
+                now = time.monotonic()
+                if progress_callback is not None and now - last_progress >= 0.25:
+                    try:
+                        progress_callback()
+                    except Exception as exc:
+                        diagnostics.event("worker_progress_callback_failed", level="warning", error=str(exc)[:300])
+                    last_progress = now
+                if cancellation_requested(request_id):
+                    cancelled = True
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except OSError:
+                        process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except OSError:
+                            process.kill()
+                        process.wait(timeout=2)
+                    break
+                if now - started >= max(1, float(timeout)):
+                    timed_out = True
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except OSError:
+                        process.kill()
+                    process.wait(timeout=2)
+                    break
+                time.sleep(0.1)
+            output.flush()
+            output.seek(0)
+            transcript = output.read()[-80000:]
+            return {
+                "ok": not cancelled and not timed_out and process.returncode == 0,
+                "cancelled": cancelled,
+                "timed_out": timed_out,
+                "returncode": process.returncode,
+                "stdout": transcript,
+            }
+    except OSError as exc:
+        return {"ok": False, "cancelled": False, "timed_out": False, "returncode": None, "stdout": "", "error": str(exc)}
 
 
 def _read_json(path: Path) -> dict:
@@ -109,7 +176,7 @@ def snapshot(tool: str, arguments: dict) -> dict:
             )
         except Exception:
             pass
-    elif tool in {"native_project_open", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project"}:
+    elif tool in {"native_project_open", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "blender_resume_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project"}:
         state["project"] = str(arguments.get("project_name", ""))[:200]
         state["application"] = str(arguments.get("application", ""))[:100]
     return state

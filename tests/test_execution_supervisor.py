@@ -1,4 +1,6 @@
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -94,6 +96,47 @@ class ExecutionSupervisorTests(unittest.TestCase):
         records = store.recent_execution_checkpoints("t1")["checkpoints"]
         self.assertEqual(records[0]["status"], "verified")
         self.assertEqual(records[0]["attempts"], 1)
+
+    def test_large_blender_checkpoint_keeps_valid_compact_json(self):
+        database = Path(self.temp.name) / "large-agent.db"
+        store = AgentPlatform(database)
+        components = [
+            {"name": f"Part {index}", "operation": "mesh", "primitive": "none", "collection": "Assembly",
+             "location": [0, 0, 0], "rotation": [0, 0, 0], "array_count": 1,
+             "vertices": [[0, 0, 0]] * 200, "faces": [[0, 0, 0]] * 200}
+            for index in range(80)
+        ]
+        store.begin_execution_checkpoint(
+            "large", "task", "request", "blender_create_advanced_project", "consequential",
+            {"project_name": "Rover", "components": components, "booleans": []}, {},
+        )
+        record = store.recent_execution_checkpoints("task")["checkpoints"][0]
+        arguments = __import__("json").loads(record["arguments"])
+        self.assertTrue(arguments["_full_arguments_omitted"])
+        self.assertEqual(arguments["component_count"], 80)
+        self.assertLessEqual(len(arguments["component_summary"]), 40)
+
+    def test_running_process_is_terminated_when_stop_is_requested(self):
+        timer = threading.Timer(0.15, lambda: execution_supervisor.request_cancel("worker", source="test"))
+        timer.start()
+        started = time.monotonic()
+        try:
+            result = execution_supervisor.run_cancellable_process(
+                ["/bin/sleep", "5"], request_id="worker", timeout=10,
+            )
+        finally:
+            timer.cancel()
+            execution_supervisor.clear_cancel()
+        self.assertTrue(result["cancelled"])
+        self.assertLess(time.monotonic() - started, 2)
+
+    def test_running_process_relays_progress_while_alive(self):
+        callback = Mock()
+        result = execution_supervisor.run_cancellable_process(
+            ["/bin/sleep", "0.35"], timeout=2, progress_callback=callback,
+        )
+        self.assertTrue(result["ok"])
+        self.assertGreaterEqual(callback.call_count, 1)
 
     def test_verified_consequential_action_is_not_repeated_in_same_request(self):
         self.platform.risk_for.return_value = "consequential"

@@ -49,12 +49,12 @@ def write_manifest(folder: Path, manifest: dict) -> None:
     temporary.replace(path)
 
 
-def progress(manifest: dict, folder: Path, phase: str, step: int, detail: str = "") -> None:
-    manifest.update({"phase": phase, "step": step, "updated_at": time.time()})
+def progress(manifest: dict, folder: Path, phase: str, step: int, detail: str = "", total_steps: int = 4) -> None:
+    manifest.update({"phase": phase, "step": step, "total_steps": total_steps, "updated_at": time.time()})
     write_manifest(folder, manifest)
     activity.update_background_task(
         manifest["job_id"], f"{manifest['application'].upper()} // {manifest['project'].upper()}",
-        phase, status="running", step=step, total_steps=4, detail=detail,
+        phase, status="running", step=step, total_steps=total_steps, detail=detail,
         route="native_worker",
     )
     diagnostics.event(
@@ -76,7 +76,9 @@ def finish(manifest: dict, folder: Path, artifacts: list[Path], error: str = "")
     activity.update_background_task(
         manifest["job_id"], f"{manifest['application'].upper()} // {manifest['project'].upper()}",
         "Project verified" if ok else "Project needs attention",
-        status="completed" if ok else "failed", step=4, total_steps=4,
+        status="completed" if ok else "failed",
+        step=int(manifest.get("total_steps", 4)) if ok else int(manifest.get("step", 1)),
+        total_steps=int(manifest.get("total_steps", 4)),
         detail=f"{len(verified)} artifacts ready" if ok else (error or "Artifact verification failed")[:180],
         route="native_worker",
     )
@@ -144,6 +146,40 @@ def locate_project(application: str, project_name: str = "") -> dict:
         "folder": str(folder), "artifact": str(primary), "manifest": manifest,
         "manifest_path": str(folder / "orion-project.json"), "verified_project": True,
     }
+
+
+def locate_resumable_draft(application: str, project_name: str = "") -> dict:
+    """Locate the newest saved native-worker specification, including failed work."""
+    canonical = mac_tools.canonical_application_name(application)
+    safe = re.sub(r"[^A-Za-z0-9 _.-]+", "", project_name).strip(" .")[:80]
+    candidates: list[Path] = []
+    if safe:
+        candidates.extend((ROOT / safe / canonical).glob("rejected-or-resumable-spec-*.json"))
+    elif ROOT.is_dir():
+        candidates.extend(ROOT.glob(f"*/{canonical}/rejected-or-resumable-spec-*.json"))
+    candidates = [path for path in candidates if path.is_file()]
+    if candidates:
+        path = max(candidates, key=lambda item: item.stat().st_mtime)
+    else:
+        legacy = ROOT / safe / canonical / "orion-project.json" if safe else None
+        if legacy is None or not legacy.is_file():
+            return {
+                "ok": False, "error_code": "resumable_draft_not_found",
+                "error": f"No resumable {canonical} specification was found for {safe or 'the recent project'}.",
+            }
+        path = legacy
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"ok": False, "error_code": "resumable_draft_unreadable", "error": str(exc)}
+    if path.name == "orion-project.json":
+        payload = {
+            "project_name": payload.get("project", safe), "description": payload.get("description", ""),
+            "design_brief_id": payload.get("design_brief_id", ""), "components": payload.get("components", []),
+            "booleans": payload.get("booleans", []), "world_color": payload.get("world_color", "#05070A"),
+            "accent_color": payload.get("accent_color", "#00D9FF"), "render": payload.get("render", True),
+        }
+    return {"ok": True, "path": str(path), "payload": payload}
 
 
 def open_project(application: str, project_name: str = "") -> dict:

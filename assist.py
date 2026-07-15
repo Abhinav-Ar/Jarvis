@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import subprocess
+import threading
 import time
 import wave
 from concurrent.futures import ThreadPoolExecutor
@@ -121,6 +123,8 @@ The brief is only a prerequisite and never proves the requested artifact is comp
 Use blender_create_advanced_project for researched product concepts, vehicles,
 architecture, machinery, environments, and detailed visual models. Use
 blender_create_project only when the user explicitly wants a quick simple blockout.
+Use blender_resume_advanced_project first when the user asks to continue, retry, or
+finish an advanced Blender project ORION previously attempted.
 Use FreeCAD or OpenSCAD—not Blender alone—for dimensional functional parts and 3D
 prints. FreeCAD supports profiles, revolves, placements, fillets, and constructive
 booleans; OpenSCAD supports code-driven parametric solids. A printable design must
@@ -155,6 +159,9 @@ When the user asks to open, show, or load a native project, use native_project_o
 Opening the application, finding the file on disk, or seeing an untitled window is
 not proof that the requested project is loaded. Completion requires the exact
 editable artifact to be opened and verified in the native application's window.
+When a native worker returns `resumable`, its draft path and design brief are the
+authoritative continuation state. Revise that draft's complete validation list in
+one pass and retry; never ask the user to locate a project ORION created or attempted.
 Use screen inspection and desktop actions only as a fallback when no semantic tool
 can do the job. Text the user explicitly asked you to type is confirmed, but typing
 does not authorize submitting it. If an app fails to become frontmost, retry using
@@ -211,7 +218,7 @@ class OrionAssistant:
         self.previous_response_id: str | None = None
         self.last_selected_tools: list[dict] = []
         self.local_session_turns: list[dict[str, str]] = []
-        self.active_native_project: dict[str, str] = {}
+        self.active_native_project: dict[str, str] = self._load_recent_native_project()
         self.task_engine = TaskEngine()
         self.platform = platform()
 
@@ -223,17 +230,82 @@ class OrionAssistant:
         self.platform.record_cloud(purpose, str(kwargs.get("model", self.model)), response)
         return response
 
+    def _cloud_response_cancellable(self, purpose: str, request_id: str, **kwargs):
+        """Let STOP return control immediately while a network response winds down."""
+        if not request_id:
+            return self._cloud_response(purpose, **kwargs)
+        completed: queue.Queue = queue.Queue(maxsize=1)
+
+        def request() -> None:
+            try:
+                completed.put((True, self._cloud_response(purpose, **kwargs)))
+            except Exception as exc:
+                completed.put((False, exc))
+
+        worker = threading.Thread(target=request, name=f"orion-{purpose}-request", daemon=True)
+        worker.start()
+        while worker.is_alive():
+            if request_id and execution_supervisor.cancellation_requested(request_id):
+                diagnostics.event("cloud_wait_cancelled", request_id=request_id, purpose=purpose)
+                return None
+            worker.join(timeout=0.1)
+        ok, value = completed.get()
+        if ok:
+            return value
+        raise value
+
+    def _finish_cancelled(self, request_id: str) -> str:
+        answer = "Stopped. I preserved completed work and cancelled the remaining task."
+        self.task_engine.finish("cancelled")
+        execution_supervisor.clear_cancel()
+        activity.update("session", "Stopped", "The active task was cancelled; completed work was preserved")
+        diagnostics.event("execution_cancelled_safely", request_id=request_id)
+        return answer
+
     def reset_session(self) -> None:
         """Start the next wake session as a fresh ChatGPT-style conversation."""
         self.previous_response_id = None
         self.last_selected_tools = []
         self.local_session_turns = []
-        self.active_native_project = {}
+        self.active_native_project = self._load_recent_native_project()
         self.task_engine.reset()
         try:
             import execution_engine
             execution_engine.clear_pending_intent()
         except Exception:
+            pass
+
+    @staticmethod
+    def _load_recent_native_project() -> dict[str, str]:
+        path = activity.RUNTIME / "recent-native-project.json"
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            return {str(key): str(item) for key, item in value.items()} if isinstance(value, dict) else {}
+        except (OSError, ValueError, TypeError):
+            pass
+        try:
+            import project_workspace
+            manifests = list(project_workspace.ROOT.glob("*/*/orion-project.json")) if project_workspace.ROOT.is_dir() else []
+            latest = max(manifests, key=lambda item: item.stat().st_mtime)
+            manifest = json.loads(latest.read_text(encoding="utf-8"))
+            return {
+                "application": str(manifest.get("application", latest.parent.name)),
+                "project": str(manifest.get("project", latest.parent.parent.name)),
+                "folder": str(latest.parent), "draft_path": "",
+                "design_brief_id": str(manifest.get("design_brief_id", "")),
+                "status": "verified" if manifest.get("verified") else "resumable",
+            }
+        except (OSError, ValueError, TypeError):
+            return {}
+
+    def _remember_native_project(self, value: dict[str, str]) -> None:
+        self.active_native_project = value
+        try:
+            activity.RUNTIME.mkdir(parents=True, exist_ok=True)
+            temporary = (activity.RUNTIME / "recent-native-project.json").with_suffix(".tmp")
+            temporary.write_text(json.dumps(value), encoding="utf-8")
+            temporary.replace(activity.RUNTIME / "recent-native-project.json")
+        except OSError:
             pass
 
     def record_turn(self, user: str, assistant: str, *, local: bool = False) -> None:
@@ -340,7 +412,7 @@ class OrionAssistant:
             tools=[definition.get("name", definition.get("type", "tool")) for definition in selected_tools], reasoning=turn_effort,
         )
         model_started = time.perf_counter()
-        response = self._cloud_response("assistant",
+        response = self._cloud_response_cancellable("assistant", request_id,
             model=self.model,
             reasoning={"effort": turn_effort},
             instructions=SYSTEM_PROMPT,
@@ -348,6 +420,8 @@ class OrionAssistant:
             tools=selected_tools,
             previous_response_id=self.previous_response_id,
         )
+        if response is None:
+            return self._finish_cancelled(request_id)
         diagnostics.event(
             "model_response_received", request_id=request_id, round=0,
             duration_ms=round((time.perf_counter() - model_started) * 1000),
@@ -359,13 +433,15 @@ class OrionAssistant:
         action_effect_evidence = False
         audit_performed = False
         for _ in range(8):
+            if request_id and execution_supervisor.cancellation_requested(request_id):
+                return self._finish_cancelled(request_id)
             calls = [item for item in response.output if item.type == "function_call"]
             if not calls:
                 if plan.requires_tools and (tools_since_audit or not audit_performed):
                     activity.update("verifying", "Checking…")
                     diagnostics.event("completion_audit_started", request_id=request_id)
                     audit_started = time.perf_counter()
-                    response = self._cloud_response("verification",
+                    response = self._cloud_response_cancellable("verification", request_id,
                         model=self.model,
                         reasoning={"effort": turn_effort},
                         instructions=SYSTEM_PROMPT,
@@ -379,6 +455,8 @@ class OrionAssistant:
                         tools=selected_tools,
                         previous_response_id=response.id,
                     )
+                    if response is None:
+                        return self._finish_cancelled(request_id)
                     tools_since_audit = False
                     audit_performed = True
                     diagnostics.event(
@@ -445,15 +523,18 @@ class OrionAssistant:
                 )
                 self.task_engine.record_tool(call.name, result)
                 completed_calls.append((call.name, arguments if 'arguments' in locals() else {}, result))
-                if result.get("ok") and call.name in {
+                if (result.get("ok") or result.get("resumable")) and call.name in {
                     "blender_create_project", "blender_refine_project", "freecad_create_project",
-                    "blender_create_advanced_project", "openscad_create_project", "resolve_create_project", "native_project_open",
+                    "blender_create_advanced_project", "blender_resume_advanced_project", "openscad_create_project", "resolve_create_project", "native_project_open",
                 }:
-                    self.active_native_project = {
+                    self._remember_native_project({
                         "application": str(result.get("application") or arguments.get("application") or ""),
                         "project": str(result.get("project") or arguments.get("project_name") or ""),
                         "folder": str(result.get("folder") or ""),
-                    }
+                        "draft_path": str(result.get("draft_path") or ""),
+                        "design_brief_id": str(result.get("design_brief_id") or arguments.get("design_brief_id") or ""),
+                        "status": "resumable" if result.get("resumable") else "verified",
+                    })
                 return {
                     "type": "function_call_output",
                     "call_id": call.call_id,
@@ -474,11 +555,7 @@ class OrionAssistant:
 
             cancelled = next((result for _, _, result in completed_calls if result.get("cancelled")), None)
             if cancelled:
-                answer = "Stopped. I left completed work in place and didn’t start the remaining steps."
-                self.task_engine.finish("cancelled")
-                execution_supervisor.clear_cancel()
-                diagnostics.event("execution_cancelled_safely", request_id=request_id)
-                return answer
+                return self._finish_cancelled(request_id)
 
             installation = next(
                 ((name, arguments, result) for name, arguments, result in completed_calls
@@ -519,7 +596,7 @@ class OrionAssistant:
                 "spotify_control", "spotify_play_playlist", "create_reminder", "create_note",
                 "install_application", "installation_status",
                 "blender_create_project", "freecad_create_project", "openscad_create_project",
-                "blender_refine_project", "blender_create_advanced_project", "resolve_create_project", "native_project_open",
+                "blender_refine_project", "blender_create_advanced_project", "blender_resume_advanced_project", "resolve_create_project", "native_project_open",
             }
             if re.match(r"^\s*(?:open|launch|start)\b", request_text, re.IGNORECASE):
                 locally_final_tools.add("open_application")
@@ -566,7 +643,18 @@ class OrionAssistant:
                 )
                 return answer
 
-            response = self._cloud_response("tool_followup",
+            completed_names = [name for name, _, _ in completed_calls]
+            if "design_project_plan" in completed_names:
+                activity.update(
+                    "planning", "Engineering the selected concept…",
+                    "Translating the approved design brief into named Blender assemblies, materials, and physical connections",
+                )
+            elif any(not result.get("ok") for _, _, result in completed_calls):
+                activity.update("planning", "Revising the approach…", "Using the failed quality evidence to prepare a corrected execution route")
+            else:
+                activity.update("verifying", "Evaluating completed work…", "Checking results against the remaining plan before the next action")
+
+            response = self._cloud_response_cancellable("tool_followup", request_id,
                 model=self.model,
                 reasoning={"effort": turn_effort},
                 instructions=SYSTEM_PROMPT,
@@ -574,6 +662,8 @@ class OrionAssistant:
                 tools=selected_tools,
                 previous_response_id=response.id,
             )
+            if response is None:
+                return self._finish_cancelled(request_id)
             diagnostics.event(
                 "model_response_received", request_id=request_id,
                 duration_ms=round((time.perf_counter() - model_started) * 1000),
@@ -696,6 +786,7 @@ class OrionAssistant:
     def speak(self, text: str, allow_barge_in: bool = False) -> tuple[float, bool, Path | None]:
         if not text or _setting("MUTE", "0") == "1":
             return 0.0, False, None
+        activity.stop_announcements()
         text = self.speech_text(text)
         if _setting("LOCAL_SPEECH", "1") == "1":
             return self._speak_local(text, allow_barge_in)

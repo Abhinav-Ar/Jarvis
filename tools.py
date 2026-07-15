@@ -28,13 +28,13 @@ ADVANCED_BLENDER_COMPONENT = {
         "name": {"type": "string"},
         "operation": {"type": "string", "enum": ["primitive", "mesh", "extrude_profile", "lathe_profile", "curve_tube", "terrain"]},
         "primitive": {"type": "string", "enum": ["none", "cube", "cylinder", "sphere", "cone", "torus"]},
-        "profile": {"type": "array", "maxItems": 64, "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}},
-        "path": {"type": "array", "maxItems": 64, "items": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}},
-        "vertices": {"type": "array", "maxItems": 256, "items": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}},
+        "profile": {"type": "array", "description": "Local 2D profile points. Final size is controlled by dimensions.", "maxItems": 64, "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}},
+        "path": {"type": "array", "description": "Local 3D curve points relative to location; do not repeat world coordinates in both fields.", "maxItems": 64, "items": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}},
+        "vertices": {"type": "array", "description": "Local mesh vertices defining shape; dimensions sets the finished world-space bounding size.", "maxItems": 256, "items": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}},
         "faces": {"type": "array", "maxItems": 256, "items": {"type": "array", "items": {"type": "integer"}, "minItems": 3, "maxItems": 8}},
-        "dimensions": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
-        "location": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
-        "rotation": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "dimensions": {"type": "array", "description": "Finished world-space X/Y/Z bounding size in meters after rotation. Curves and terrain derive size from their points.", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "location": {"type": "array", "description": "World X/Y/Z position in meters.", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "rotation": {"type": "array", "description": "Euler X/Y/Z rotation in DEGREES, never radians. A cylinder whose axle runs along Y normally uses [90,0,0].", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
         "depth": {"type": "number"}, "radius": {"type": "number"}, "segments": {"type": "integer"},
         "color": {"type": "string"}, "metallic": {"type": "number"}, "roughness": {"type": "number"}, "emission": {"type": "number"},
         "bevel": {"type": "number"}, "subdivision": {"type": "integer"},
@@ -43,8 +43,9 @@ ADVANCED_BLENDER_COMPONENT = {
         "array_offset": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
         "smooth": {"type": "boolean"}, "role": {"type": "string", "enum": ["object", "cutter"]},
         "design_intent": {"type": "string", "description": "The requirement or design principle this component exists to satisfy."},
+        "collection": {"type": "string", "description": "Named functional collection such as Wheels, Suspension, Chassis, Sensors, Arm, Cargo, Cables, Details, or Environment."},
     },
-    "required": ["name", "operation", "primitive", "profile", "path", "vertices", "faces", "dimensions", "location", "rotation", "depth", "radius", "segments", "color", "metallic", "roughness", "emission", "bevel", "subdivision", "solidify", "mirror_axis", "array_count", "array_offset", "smooth", "role", "design_intent"],
+    "required": ["name", "operation", "primitive", "profile", "path", "vertices", "faces", "dimensions", "location", "rotation", "depth", "radius", "segments", "color", "metallic", "roughness", "emission", "bevel", "subdivision", "solidify", "mirror_axis", "array_count", "array_offset", "smooth", "role", "design_intent", "collection"],
     "additionalProperties": False,
 }
 
@@ -703,7 +704,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "type": "function", "name": "blender_create_advanced_project",
-        "description": "Create a detailed editable Blender project from an approved engineering design brief using safe procedural modeling: explicit vertex/face topology, profiles, revolved surfaces, curves, booleans, arrays, and modifier stacks. Use for product concepts and visual models; route dimensional printable parts to FreeCAD or OpenSCAD.",
+        "description": "Create a detailed editable Blender project from an approved engineering design brief using safe procedural modeling: explicit vertex/face topology, profiles, revolved surfaces, curves, booleans, arrays, and modifier stacks. All dimensions and locations are meters; rotations are degrees. Model every repeated assembly at its actual world position rather than leaving one detail at the origin. Production-quality scenes must resolve physical connections and tertiary detail, not merely name primitive blockouts. Use for product concepts and visual models; route dimensional printable parts to FreeCAD or OpenSCAD.",
         "parameters": {"type": "object", "properties": {
             "project_name": {"type": "string"}, "description": {"type": "string"}, "design_brief_id": {"type": "string"},
             "components": {"type": "array", "minItems": 1, "maxItems": 120, "items": ADVANCED_BLENDER_COMPONENT},
@@ -714,6 +715,14 @@ TOOL_DEFINITIONS = [
             "world_color": {"type": "string"}, "accent_color": {"type": "string"},
             "render": {"type": "boolean"}, "confirmed": {"type": "boolean"}
         }, "required": ["project_name", "description", "design_brief_id", "components", "booleans", "world_color", "accent_color", "render", "confirmed"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "blender_resume_advanced_project",
+        "description": "Resume the newest saved advanced Blender draft for an ORION-created project. Use this first for continue, retry, or finish-the-rover follow-ups; it retrieves the exact local specification and design brief without asking the user for a file path.",
+        "parameters": {"type": "object", "properties": {
+            "project_name": {"type": "string"}, "confirmed": {"type": "boolean"}
+        }, "required": ["project_name", "confirmed"], "additionalProperties": False},
         "strict": True,
     },
     {
@@ -784,7 +793,7 @@ TOOL_GROUPS = {
     "capabilities": {"capability_families_status", "objective_compile"},
     "google_workspace": {"objective_compile", "google_drive_search", "google_create_spreadsheet", "google_create_document", "google_create_presentation", "browser_navigate"},
     "software": {"install_application", "installation_status"},
-    "native_projects": {"__web_search__", "design_project_plan", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open", "desktop_inspect", "find_files", "open_application", "desktop_window_arrange"},
+    "native_projects": {"__web_search__", "design_project_plan", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "blender_resume_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open", "desktop_inspect", "find_files", "open_application", "desktop_window_arrange"},
 }
 
 MUTATING_TOOLS = {
@@ -799,7 +808,7 @@ MUTATING_TOOLS = {
     "memory_store", "memory_forget", "orion_teach_workflow",
     "codex_generate", "generation_cancel",
     "google_create_spreadsheet", "google_create_document", "google_create_presentation",
-    "design_project_plan", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open",
+    "design_project_plan", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "blender_resume_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open",
     "project_session_start", "project_session_resume", "project_session_close",
 }
 
@@ -835,7 +844,7 @@ def select_definitions(request: str) -> list[dict]:
         (("what can you do", "capability", "worker families", "available workers", "adapter"), "capabilities"),
         (("google drive", "google sheet", "spreadsheet", "google doc", "google slides", "budget", "finances", "expense tracker"), "google_workspace"),
         (("install ", "download ", "is installed", "installation", "installed yet"), "software"),
-        (("blender", "freecad", "free cad", "openscad", "open scad", "davinci", "da vinci", "resolve", "3d model", "cad model", "3d print", "printable", "product design", "industrial design", "video project", "timeline"), "native_projects"),
+        (("blender", "freecad", "free cad", "openscad", "open scad", "davinci", "da vinci", "resolve", "3d model", "cad model", "3d print", "printable", "product design", "industrial design", "video project", "timeline", "rover", "3d scene", "modeling"), "native_projects"),
     )
     for markers, group in routes:
         if any(marker in text for marker in markers):
@@ -1015,6 +1024,11 @@ def blender_create_advanced_project(**arguments) -> dict:
     return blender_advanced_worker.create_project(**arguments)
 
 
+def blender_resume_advanced_project(**arguments) -> dict:
+    import blender_advanced_worker
+    return blender_advanced_worker.resume_project(**arguments)
+
+
 def freecad_create_project(**arguments) -> dict:
     import freecad_worker
     return freecad_worker.create_project(**arguments)
@@ -1095,6 +1109,7 @@ def execute(name: str, arguments: dict, context: dict | None = None) -> dict:
         "blender_create_project": blender_create_project,
         "blender_refine_project": blender_refine_project,
         "blender_create_advanced_project": blender_create_advanced_project,
+        "blender_resume_advanced_project": blender_resume_advanced_project,
         "freecad_create_project": freecad_create_project,
         "openscad_create_project": openscad_create_project,
         "resolve_create_project": resolve_create_project,
@@ -1114,7 +1129,7 @@ def execute(name: str, arguments: dict, context: dict | None = None) -> dict:
             "_request_id": str(context.get("request_id", "")),
             "_task_id": str(context.get("task_id", "")),
         })
-    if name in {"design_project_plan", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project"} and context:
+    if name in {"design_project_plan", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "blender_resume_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project"} and context:
         effective_arguments["_request_id"] = str(context.get("request_id", ""))
     result = execution_supervisor.execute(
         name,
@@ -1193,7 +1208,7 @@ def result_summary(name: str, arguments: dict, result: dict) -> str:
     if name == "blender_refine_project":
         opened = " and reopened it" if result.get("opened") else ""
         return f"I refined and rerendered {result.get('project')}{opened} in Blender."
-    if name == "blender_create_advanced_project":
+    if name in {"blender_create_advanced_project", "blender_resume_advanced_project"}:
         opened = " and opened it" if result.get("opened") else ""
         return f"I procedurally modeled, verified, and rendered {result.get('project')}{opened} in Blender."
     if name == "install_application":

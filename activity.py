@@ -27,6 +27,7 @@ TEXT_COMMAND_DIR = RUNTIME / "text-commands"
 _lock = threading.Lock()
 _announcement_lock = threading.Lock()
 _last_announcements: dict[str, float] = {}
+_announcement_process: subprocess.Popen | None = None
 
 
 def update(state: str, label: str, detail: str = "") -> None:
@@ -192,6 +193,7 @@ def describe_tool(name: str, arguments: dict) -> tuple[str, str]:
         "blender_create_project": "GENERATE BLENDER PROJECT",
         "blender_refine_project": "REFINE BLENDER PROJECT",
         "blender_create_advanced_project": "PROCEDURAL MODELING",
+        "blender_resume_advanced_project": "RESUME PROCEDURAL MODEL",
         "native_project_open": "LOAD NATIVE PROJECT",
         "freecad_create_project": "GENERATE FREECAD PROJECT",
         "openscad_create_project": "COMPILE OPENSCAD PROJECT",
@@ -211,7 +213,7 @@ def describe_tool(name: str, arguments: dict) -> tuple[str, str]:
         target = ", ".join(arguments.get("applications", [])) or "application windows"
     elif name.startswith("spotify_"):
         target = str(arguments.get("name") or arguments.get("query") or arguments.get("action") or "Spotify")
-    elif name in {"blender_create_project", "blender_refine_project", "blender_create_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project"}:
+    elif name in {"blender_create_project", "blender_refine_project", "blender_create_advanced_project", "blender_resume_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project"}:
         target = str(arguments.get("project_name") or "native project")
     elif name == "native_project_open":
         target = f"{arguments.get('project_name') or 'latest project'} in {arguments.get('application') or 'native app'}"
@@ -282,16 +284,26 @@ def announce(message: str, key: str = "", minimum_interval: float = 8.0) -> None
     if _setting("PROGRESS_SPEECH", "1") != "1" or not message.strip():
         return
     identity = key or message.lower().strip()
+    global _announcement_process
     with _announcement_lock:
         now = time.monotonic()
         if now - _last_announcements.get(identity, 0.0) < minimum_interval:
             return
         _last_announcements[identity] = now
-    subprocess.Popen(
-        ["/usr/bin/say", message],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+        if _announcement_process is not None and _announcement_process.poll() is None:
+            _announcement_process.terminate()
+        _announcement_process = subprocess.Popen(
+            ["/usr/bin/say", message], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+
+
+def stop_announcements() -> None:
+    """Give final responses exclusive ownership of speech output."""
+    global _announcement_process
+    with _announcement_lock:
+        if _announcement_process is not None and _announcement_process.poll() is None:
+            _announcement_process.terminate()
+        _announcement_process = None
 
 
 def cue(kind: str) -> None:
@@ -311,8 +323,4 @@ def cue(kind: str) -> None:
 
 def acknowledge() -> None:
     if _setting("PROGRESS_SPEECH", "1") == "1":
-        subprocess.Popen(
-            ["/usr/bin/say", "On it."],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        announce("On it.", key="acknowledge", minimum_interval=2.0)

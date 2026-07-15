@@ -117,6 +117,7 @@ stores those credentials in its memory, replay, diagnostics, or model context.
 ORION can generate durable, editable projects through installed application APIs:
 
 - Blender: structured scenes, procedural component detail, physical accent-light placement, neutral cinematic lighting, cameras, safe in-place refinements with backups, `.blend`, and rendered previews.
+  Complex scenes use a constrained procedural modeler with custom vertex/face topology, profile extrusion, lathe/revolve surfaces, curve tubes, terrain, booleans, arrays, and editable modifier stacks instead of primitive-only blockouts.
 - FreeCAD: structured parametric solids, editable `.FCStd`, and STEP/STL exports.
 - OpenSCAD: self-contained `.scad` source with verified STL compilation.
 - DaVinci Resolve: project settings, media import, media pools, timelines, and saved Resolve projects.

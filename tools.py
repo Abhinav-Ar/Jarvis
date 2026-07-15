@@ -20,6 +20,32 @@ import app_installer
 from agent_platform import platform
 
 
+ADVANCED_BLENDER_COMPONENT = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "operation": {"type": "string", "enum": ["primitive", "mesh", "extrude_profile", "lathe_profile", "curve_tube", "terrain"]},
+        "primitive": {"type": "string", "enum": ["none", "cube", "cylinder", "sphere", "cone", "torus"]},
+        "profile": {"type": "array", "maxItems": 64, "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}},
+        "path": {"type": "array", "maxItems": 64, "items": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}},
+        "vertices": {"type": "array", "maxItems": 256, "items": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}},
+        "faces": {"type": "array", "maxItems": 256, "items": {"type": "array", "items": {"type": "integer"}, "minItems": 3, "maxItems": 8}},
+        "dimensions": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "location": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "rotation": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "depth": {"type": "number"}, "radius": {"type": "number"}, "segments": {"type": "integer"},
+        "color": {"type": "string"}, "metallic": {"type": "number"}, "roughness": {"type": "number"}, "emission": {"type": "number"},
+        "bevel": {"type": "number"}, "subdivision": {"type": "integer"},
+        "solidify": {"type": "number"}, "mirror_axis": {"type": "string", "enum": ["none", "x", "y", "z"]},
+        "array_count": {"type": "integer"},
+        "array_offset": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+        "smooth": {"type": "boolean"}, "role": {"type": "string", "enum": ["object", "cutter"]},
+    },
+    "required": ["name", "operation", "primitive", "profile", "path", "vertices", "faces", "dimensions", "location", "rotation", "depth", "radius", "segments", "color", "metallic", "roughness", "emission", "bevel", "subdivision", "solidify", "mirror_axis", "array_count", "array_offset", "smooth", "role"],
+    "additionalProperties": False,
+}
+
+
 TOOL_DEFINITIONS = [
     {"type": "web_search"},
     {
@@ -638,6 +664,21 @@ TOOL_DEFINITIONS = [
         "strict": True,
     },
     {
+        "type": "function", "name": "blender_create_advanced_project",
+        "description": "Create a detailed editable Blender project using safe procedural modeling: explicit vertex/face topology, arbitrary 2D profile extrusion, lathe/revolve surfaces, curve tubes, procedural terrain, editable boolean relationships, arrays, mirror/solidify/bevel/subdivision modifier stacks, emission, automatic lighting, and camera framing. Prefer this over blender_create_project for products, vehicles, architecture, machinery, environments, or any scene requiring real modeled detail rather than a simple blockout.",
+        "parameters": {"type": "object", "properties": {
+            "project_name": {"type": "string"}, "description": {"type": "string"},
+            "components": {"type": "array", "minItems": 1, "maxItems": 120, "items": ADVANCED_BLENDER_COMPONENT},
+            "booleans": {"type": "array", "maxItems": 50, "items": {"type": "object", "properties": {
+                "target": {"type": "string"}, "cutter": {"type": "string"},
+                "operation": {"type": "string", "enum": ["DIFFERENCE", "UNION", "INTERSECT"]}
+            }, "required": ["target", "cutter", "operation"], "additionalProperties": False}},
+            "world_color": {"type": "string"}, "accent_color": {"type": "string"},
+            "render": {"type": "boolean"}, "confirmed": {"type": "boolean"}
+        }, "required": ["project_name", "description", "components", "booleans", "world_color", "accent_color", "render", "confirmed"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
         "type": "function", "name": "native_project_open",
         "description": "Open and visibly load the exact editable file for a verified ORION native project. Use this instead of open_application when the user asks to open, show, or load a Blender, FreeCAD, or OpenSCAD project.",
         "parameters": {"type": "object", "properties": {
@@ -700,7 +741,7 @@ TOOL_GROUPS = {
     "capabilities": {"capability_families_status", "objective_compile"},
     "google_workspace": {"objective_compile", "google_drive_search", "google_create_spreadsheet", "google_create_document", "google_create_presentation", "browser_navigate"},
     "software": {"install_application", "installation_status"},
-    "native_projects": {"blender_create_project", "blender_refine_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open", "find_files", "open_application", "desktop_window_arrange"},
+    "native_projects": {"blender_create_project", "blender_refine_project", "blender_create_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open", "find_files", "open_application", "desktop_window_arrange"},
 }
 
 MUTATING_TOOLS = {
@@ -715,7 +756,7 @@ MUTATING_TOOLS = {
     "memory_store", "memory_forget", "orion_teach_workflow",
     "codex_generate", "generation_cancel",
     "google_create_spreadsheet", "google_create_document", "google_create_presentation",
-    "blender_create_project", "blender_refine_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open",
+    "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open",
     "project_session_start", "project_session_resume", "project_session_close",
 }
 
@@ -910,6 +951,11 @@ def blender_refine_project(**arguments) -> dict:
     return blender_worker.refine_project(**arguments)
 
 
+def blender_create_advanced_project(**arguments) -> dict:
+    import blender_advanced_worker
+    return blender_advanced_worker.create_project(**arguments)
+
+
 def freecad_create_project(**arguments) -> dict:
     import freecad_worker
     return freecad_worker.create_project(**arguments)
@@ -988,6 +1034,7 @@ def execute(name: str, arguments: dict, context: dict | None = None) -> dict:
         "google_create_presentation": google_create_presentation,
         "blender_create_project": blender_create_project,
         "blender_refine_project": blender_refine_project,
+        "blender_create_advanced_project": blender_create_advanced_project,
         "freecad_create_project": freecad_create_project,
         "openscad_create_project": openscad_create_project,
         "resolve_create_project": resolve_create_project,
@@ -1007,7 +1054,7 @@ def execute(name: str, arguments: dict, context: dict | None = None) -> dict:
             "_request_id": str(context.get("request_id", "")),
             "_task_id": str(context.get("task_id", "")),
         })
-    if name in {"blender_create_project", "blender_refine_project", "freecad_create_project", "openscad_create_project", "resolve_create_project"} and context:
+    if name in {"blender_create_project", "blender_refine_project", "blender_create_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project"} and context:
         effective_arguments["_request_id"] = str(context.get("request_id", ""))
     result = recovery.execute(name, effective_arguments, handlers[name])
     if result.get("ok") and name in {"open_application", "browser_navigate"}:
@@ -1080,6 +1127,9 @@ def result_summary(name: str, arguments: dict, result: dict) -> str:
     if name == "blender_refine_project":
         opened = " and reopened it" if result.get("opened") else ""
         return f"I refined and rerendered {result.get('project')}{opened} in Blender."
+    if name == "blender_create_advanced_project":
+        opened = " and opened it" if result.get("opened") else ""
+        return f"I procedurally modeled, verified, and rendered {result.get('project')}{opened} in Blender."
     if name == "install_application":
         application = result.get("application") or arguments.get("application") or "The application"
         if result.get("status") == "installed":

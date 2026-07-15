@@ -44,7 +44,7 @@ class ToolTests(unittest.TestCase):
                 "codex_generate", "generation_status", "generation_cancel",
                 "capability_families_status", "objective_compile", "google_drive_search",
                 "google_create_spreadsheet", "google_create_document", "google_create_presentation",
-                "blender_create_project", "blender_refine_project", "freecad_create_project",
+                "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "freecad_create_project",
                 "openscad_create_project", "resolve_create_project", "native_project_open",
                 "install_application", "installation_status",
             }
@@ -73,6 +73,12 @@ class ToolTests(unittest.TestCase):
             "Add a cyan strip around that desk. Active native project: Blender NeonDust32"
         )}
         self.assertIn("blender_refine_project", names)
+
+    def test_complex_blender_scene_exposes_advanced_modeler(self):
+        names = {definition["name"] for definition in tools.select_definitions(
+            "Create a detailed Blender lunar outpost with a rover and satellite dishes"
+        )}
+        self.assertIn("blender_create_advanced_project", names)
 
     def test_install_request_selects_native_installer(self):
         names = {definition["name"] for definition in tools.select_definitions("Install Blender on my laptop")}

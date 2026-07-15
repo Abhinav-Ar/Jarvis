@@ -97,14 +97,21 @@ tabs, formulas, validation, formatting, or charts. Never claim creation when Goo
 authorization is unavailable, and never replace the requested Drive artifact with
 a local file unless the user agrees.
 Native creative and engineering requests must use their dedicated worker whenever
-the user explicitly asks to create a project or artifact: blender_create_project
-for editable scenes and renders, freecad_create_project for editable parametric
+the user explicitly asks to create a project or artifact: blender_create_advanced_project
+for products, vehicles, architecture, machinery, environments, or any detailed
+hard-surface scene; blender_create_project only for intentionally simple blockouts;
+freecad_create_project for editable parametric
 parts plus STEP/STL, openscad_create_project for self-contained source plus STL,
 and resolve_create_project for Resolve projects, media pools, and timelines. Infer
 reasonable project defaults from the objective instead of asking the user to design
 the internal scene graph. Do not claim deep project creation from merely opening or
 clicking the application. Never overwrite an existing Resolve project or import
 media outside the user's home folder.
+For advanced Blender work, decompose every named subject into a multi-part assembly
+with primary forms, structural components, and visible secondary detail. Use profile
+extrusion, revolved profiles, curves, custom vertex/face meshes, booleans, arrays,
+and modifier stacks as appropriate. One primitive per requested noun is only a
+blockout and does not satisfy a request for a finished or detailed model.
 Treat colored neon/RGB/accent lighting as a physical fixture or emissive strip by
 default, with neutral general illumination. Never represent a requested light as
 an arbitrary floating sphere or color-wash every material. For a follow-up change
@@ -385,7 +392,7 @@ class OrionAssistant:
                 completed_calls.append((call.name, arguments if 'arguments' in locals() else {}, result))
                 if result.get("ok") and call.name in {
                     "blender_create_project", "blender_refine_project", "freecad_create_project",
-                    "openscad_create_project", "resolve_create_project", "native_project_open",
+                    "blender_create_advanced_project", "openscad_create_project", "resolve_create_project", "native_project_open",
                 }:
                     self.active_native_project = {
                         "application": str(result.get("application") or arguments.get("application") or ""),
@@ -449,7 +456,7 @@ class OrionAssistant:
                 "spotify_control", "spotify_play_playlist", "create_reminder", "create_note",
                 "install_application", "installation_status",
                 "blender_create_project", "freecad_create_project", "openscad_create_project",
-                "blender_refine_project", "resolve_create_project", "native_project_open",
+                "blender_refine_project", "blender_create_advanced_project", "resolve_create_project", "native_project_open",
             }
             if re.match(r"^\s*(?:open|launch|start)\b", request_text, re.IGNORECASE):
                 locally_final_tools.add("open_application")

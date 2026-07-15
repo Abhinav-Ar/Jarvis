@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import blender_worker
+import blender_advanced_worker
 import openscad_worker
 import project_workspace
 
@@ -18,6 +19,21 @@ class NativeProjectWorkerTests(unittest.TestCase):
         result = blender_worker.refine_project("Test", "", "desk_perimeter", "#00E5FF", 1.0, True, False)
         self.assertFalse(result["ok"])
         self.assertEqual(result["error_code"], "confirmation_required")
+
+    def test_advanced_blender_requires_explicit_confirmation(self):
+        result = blender_advanced_worker.create_project("Test", "", [], [], "#000000", "#00FFFF", True, False)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "confirmation_required")
+
+    def test_advanced_blender_rejects_missing_boolean_target(self):
+        component = {
+            "name": "Shell", "operation": "primitive", "primitive": "cube",
+            "profile": [], "path": [], "dimensions": [1, 1, 1],
+        }
+        error = blender_advanced_worker._validate(
+            [component], [{"target": "Shell", "cutter": "Missing", "operation": "DIFFERENCE"}],
+        )
+        self.assertIn("existing components", error)
 
     def test_blender_script_generates_physical_accents_and_component_detail(self):
         script = blender_worker._create_script(

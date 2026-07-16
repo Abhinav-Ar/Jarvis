@@ -60,6 +60,21 @@ class FastCommandTests(unittest.TestCase):
     def test_multistep_request_does_not_take_fast_lane(self):
         self.assertIsNone(fast_commands.execute("Open Safari and then go to Google"))
 
+    @patch("fast_commands._recent_native_project", return_value={
+        "application": "Blender", "project": "LEGO UCS Venator Wall Mount Concept", "status": "resumable",
+    })
+    @patch("fast_commands._tool", return_value={
+        "ok": True, "project": "LEGO UCS Venator Wall Mount Concept", "application": "Blender",
+        "verified": True, "loaded": True, "design_review": {"passed": True},
+    })
+    def test_saved_blender_resume_bypasses_paid_planning(self, run_tool, recent):
+        answer = fast_commands.execute("Continue the Venator wall mount project from the saved draft")
+        self.assertIn("completed and verified", answer)
+        run_tool.assert_called_once_with(
+            "blender_resume_advanced_project",
+            {"project_name": "LEGO UCS Venator Wall Mount Concept", "confirmed": True}, "",
+        )
+
     @patch("fast_commands._stage")
     @patch("fast_commands._tool", return_value={"ok": True, "url": "https://google.com", "frontmost": True})
     def test_direct_website_navigation_bypasses_model(self, run_tool, stage):

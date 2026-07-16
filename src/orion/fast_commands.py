@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from urllib.parse import urlparse
 
 import mac_tools
+
+
+def _recent_native_project() -> dict:
+    try:
+        import activity
+        value = json.loads((activity.RUNTIME / "recent-native-project.json").read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
 
 
 def _tool(name: str, arguments: dict, request_id: str = "") -> dict:
@@ -96,6 +106,36 @@ def execute(text: str, request_id: str = "") -> str | None:
     for prefix in ("hey ", "okay ", "ok ", "please "):
         if command.startswith(prefix):
             command = command[len(prefix):]
+
+    native_resume = re.fullmatch(
+        r"(?:continue|retry|finish|resume working on) (?:the )?(.+?) (?:blender )?project(?: from (?:the )?saved draft)?",
+        command,
+    )
+    if native_resume:
+        recent = _recent_native_project()
+        project = str(recent.get("project", "")).strip()
+        requested = native_resume.group(1).strip()
+        requested_tokens = {token for token in requested.split() if len(token) > 2 and token not in {"saved", "draft"}}
+        project_tokens = set(re.sub(r"[^a-z0-9 ]", " ", project.lower()).split())
+        matches_active = not requested_tokens or bool(requested_tokens & project_tokens)
+        if (
+            recent.get("status") == "resumable"
+            and str(recent.get("application", "")).casefold() == "blender"
+            and project and matches_active
+        ):
+            result = _tool(
+                "blender_resume_advanced_project",
+                {"project_name": project, "confirmed": True}, request_id,
+            )
+            if result.get("ok"):
+                import tools
+                return tools.result_summary(
+                    "blender_resume_advanced_project", {"project_name": project}, result,
+                )
+            if result.get("resumable"):
+                issues = [str(item.get("message", "")) for item in result.get("validation_issue_records", [])]
+                detail = " ".join(issues[:2]) or str(result.get("error", ""))[:400]
+                return f"I preserved the {project} draft, but it still needs a repair before Blender can finish. {detail}".strip()
 
     if command in {
         "status", "orion status", "agent status", "what are you working on",

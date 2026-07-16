@@ -161,6 +161,22 @@ class ExecutionSupervisorTests(unittest.TestCase):
         self.assertTrue(result["alternative_route_required"])
         handler.assert_not_called()
 
+    def test_quality_feedback_does_not_open_adapter_circuit(self):
+        self.platform.tool_failure_window.return_value = {
+            "failures": 3, "latest_error_code": "design_quality_gate_failed", "cooldown_seconds": 120,
+        }
+        handler = Mock(return_value={
+            "ok": False, "resumable": True, "error_code": "design_quality_gate_failed",
+            "error": "Correct the saved specification",
+        })
+        with (
+            patch("execution_supervisor.platform", return_value=self.platform),
+            patch("execution_supervisor.snapshot", return_value={}),
+        ):
+            result = execution_supervisor.execute("blender_revise_advanced_project", {}, handler)
+        self.assertEqual(result["error_code"], "design_quality_gate_failed")
+        handler.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

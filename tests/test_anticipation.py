@@ -29,6 +29,12 @@ class AnticipationTests(unittest.TestCase):
         self.assertEqual(context["frontmost_application"], "Blender")
         self.assertEqual([item["name"] for item in context["design_applications"]], ["Blender"])
 
+    def test_existing_design_uses_revision_prerequisites(self):
+        result = anticipation.analyze("Fix and rebuild the current Blender rover")
+        self.assertTrue(any("actual existing native document" in step for step in result["prerequisite_steps"]))
+        self.assertTrue(any("unaffected" in step for step in result["prerequisite_steps"]))
+        self.assertFalse(any("Research comparable" in step for step in result["prerequisite_steps"]))
+
 
 if __name__ == "__main__":
     unittest.main()

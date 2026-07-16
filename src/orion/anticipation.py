@@ -88,14 +88,19 @@ def classify(request: str) -> str:
 
 def action_requested(request: str) -> bool:
     text = " ".join(request.lower().split())
+    text = re.sub(r"^(?:okay|ok|yes|yeah|alright)[, ]+", "", text)
     if text.startswith("please "):
         text = text[len("please "):]
+    if text.startswith(("do this", "do it", "go ahead", "carry this out", "carry it out")):
+        return True
     if text.startswith(INFORMATION_PREFIXES):
         return False
     verbs = (
         "open", "close", "create", "make", "build", "generate", "install", "download",
         "arrange", "move", "resize", "commit", "push", "play", "pause", "write", "fill",
         "send", "schedule", "remind", "add", "change", "set", "run", "start", "stop",
+        "fix", "repair", "rebuild", "revise", "refine", "continue", "resume",
+        "edit", "enact", "apply",
     )
     return any(re.search(rf"\b{verb}\b", text) for verb in verbs)
 
@@ -110,12 +115,31 @@ def analyze(request: str) -> dict[str, Any]:
             "completion_steps": [], "success_criteria": [], "likely_followups": [],
             "policy": "Answer directly; do not manufacture an action objective.",
         }
+    prerequisites = list(rule["prerequisites"])
+    completion = list(rule["completion"])
+    criteria = list(rule["criteria"])
+    if category == "engineering_design" and any(
+        marker in " ".join(request.lower().split())
+        for marker in ("existing", "current", "fix", "repair", "revise", "refine", "rebuild", "continue", "resume", "edit", "enact", "apply")
+    ):
+        prerequisites = [
+            "Inspect the actual existing native document and its object-level hierarchy",
+            "Load its approved design intent and preserve every unaffected object",
+        ]
+        completion = [
+            "Apply only the requested object-level edits to the existing native document",
+            "Verify the changed relationships, preserve a backup, and reopen the exact edited project",
+        ]
+        criteria = [
+            "The revision preserves the original design direction and unaffected authored work",
+            "Every stored failure is resolved with fresh native-project evidence",
+        ]
     return {
         "category": category,
         "action": True,
-        "prerequisite_steps": list(rule["prerequisites"]),
-        "completion_steps": list(rule["completion"]),
-        "success_criteria": list(rule["criteria"]),
+        "prerequisite_steps": prerequisites,
+        "completion_steps": completion,
+        "success_criteria": criteria,
         "likely_followups": list(rule["next"]),
         "policy": (
             "Complete safe reversible prerequisites and verification inside the requested objective. "

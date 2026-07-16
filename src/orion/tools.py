@@ -36,18 +36,32 @@ ADVANCED_BLENDER_COMPONENT = {
         "location": {"type": "array", "description": "World X/Y/Z position in meters.", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
         "rotation": {"type": "array", "description": "Euler X/Y/Z rotation in DEGREES, never radians. A cylinder whose axle runs along Y normally uses [90,0,0].", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
         "depth": {"type": "number"}, "radius": {"type": "number"}, "segments": {"type": "integer"},
-        "color": {"type": "string"}, "metallic": {"type": "number"}, "roughness": {"type": "number"}, "emission": {"type": "number"},
+        "color": {"type": "string"},
+        "material_family": {"type": "string", "enum": ["metal", "polymer", "rubber", "glass", "thermal_insulation", "regolith", "emissive"], "description": "Physical material family; use all families explicitly required by the brief."},
+        "metallic": {"type": "number"}, "roughness": {"type": "number"}, "transmission": {"type": "number", "minimum": 0, "maximum": 1}, "emission": {"type": "number"},
         "bevel": {"type": "number"}, "subdivision": {"type": "integer"},
         "solidify": {"type": "number"}, "mirror_axis": {"type": "string", "enum": ["none", "x", "y", "z"]},
         "array_count": {"type": "integer"},
         "array_offset": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
         "smooth": {"type": "boolean"}, "role": {"type": "string", "enum": ["object", "cutter"]},
+        "system_role": {
+            "type": "string",
+            "enum": [
+                "structure", "enclosure", "wheel", "hub", "axle", "rocker", "bogie",
+                "pivot", "tread", "sensor", "arm", "cargo", "cable", "fastener",
+                "panel", "marking", "light", "terrain", "environment", "detail", "cutter"
+            ],
+            "description": "Functional engineering role used for deterministic assembly and quality checks; do not rely on the object name to imply this role."
+        },
         "design_intent": {"type": "string", "description": "The requirement or design principle this component exists to satisfy."},
         "collection": {"type": "string", "description": "Named functional collection such as Wheels, Suspension, Chassis, Sensors, Arm, Cargo, Cables, Details, or Environment."},
     },
-    "required": ["name", "operation", "primitive", "profile", "path", "vertices", "faces", "dimensions", "location", "rotation", "depth", "radius", "segments", "color", "metallic", "roughness", "emission", "bevel", "subdivision", "solidify", "mirror_axis", "array_count", "array_offset", "smooth", "role", "design_intent", "collection"],
+    "required": ["name", "operation", "primitive", "profile", "path", "vertices", "faces", "dimensions", "location", "rotation", "depth", "radius", "segments", "color", "material_family", "metallic", "roughness", "transmission", "emission", "bevel", "subdivision", "solidify", "mirror_axis", "array_count", "array_offset", "smooth", "role", "system_role", "design_intent", "collection"],
     "additionalProperties": False,
 }
+
+BLENDER_ANCHOR = {"type": "string", "enum": ["center", "min_x", "max_x", "min_y", "max_y", "min_z", "max_z"]}
+VECTOR3 = {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
 
 
 TOOL_DEFINITIONS = [
@@ -704,7 +718,7 @@ TOOL_DEFINITIONS = [
     },
     {
         "type": "function", "name": "blender_create_advanced_project",
-        "description": "Create a detailed editable Blender project from an approved engineering design brief using safe procedural modeling: explicit vertex/face topology, profiles, revolved surfaces, curves, booleans, arrays, and modifier stacks. All dimensions and locations are meters; rotations are degrees. Model every repeated assembly at its actual world position rather than leaving one detail at the origin. Production-quality scenes must resolve physical connections and tertiary detail, not merely name primitive blockouts. Use for product concepts and visual models; route dimensional printable parts to FreeCAD or OpenSCAD.",
+        "description": "Create a detailed editable Blender project from an approved engineering design brief using safe procedural modeling: explicit vertex/face topology, profiles, revolved surfaces, curves, booleans, arrays, and modifier stacks. All dimensions and locations are meters; rotations are degrees. Give every component an explicit functional system_role so assembly checks do not depend on naming. Never declare operation=mesh without vertices and faces; use primitive, a profile, or a curve instead. Model every repeated assembly at its actual world position. Production-quality scenes must resolve physical connections, clearance, camera framing, material separation, and tertiary detail. Use for product concepts and visual models; route dimensional printable parts to FreeCAD or OpenSCAD.",
         "parameters": {"type": "object", "properties": {
             "project_name": {"type": "string"}, "description": {"type": "string"}, "design_brief_id": {"type": "string"},
             "components": {"type": "array", "minItems": 1, "maxItems": 120, "items": ADVANCED_BLENDER_COMPONENT},
@@ -718,11 +732,105 @@ TOOL_DEFINITIONS = [
         "strict": True,
     },
     {
+        "type": "function", "name": "blender_inspect_existing_document",
+        "description": "Inspect the actual objects, transforms, world bounds, parents, modifiers, roles, and collections stored inside an existing .blend file. This reads the real Blender document rather than ORION's generation recipe and makes no changes. Always call this before editing an existing Blender document.",
+        "parameters": {"type": "object", "properties": {
+            "project_name": {"type": "string", "description": "Known ORION project name, or empty when file_path is provided."},
+            "file_path": {"type": "string", "description": "Exact .blend path, or empty to resolve the known project."}
+        }, "required": ["project_name", "file_path"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "blender_edit_existing_document",
+        "description": "Substantively edit exact named objects inside an existing .blend document in place. It saves the open document when requested, creates a timestamped backup, and can add or replace authored profile-extruded, lathed, curved, or custom-mesh geometry; apply booleans; and perform bounded hierarchy, transform, mate, connector, and modifier changes. Choose edit_scope honestly: geometry_revision and structural_repair cannot pass verification using only parenting or coordinate changes. Always use after blender_inspect_existing_document for an explicit edit/apply/enact request and preserve unaffected objects.",
+        "parameters": {"type": "object", "properties": {
+            "project_name": {"type": "string"}, "file_path": {"type": "string"},
+            "edit_scope": {"type": "string", "enum": ["hierarchy", "alignment", "structural_repair", "geometry_revision"], "description": "The minimum class of change required. Use geometry_revision when the user asks to reshape, remodel, add detail, or fix visible geometry."},
+            "parents": {"type": "array", "maxItems": 40, "items": {"type": "object", "properties": {
+                "parent": {"type": "string"}, "children": {"type": "array", "items": {"type": "string"}, "maxItems": 120},
+                "create_parent": {"type": "boolean"}, "collection": {"type": "string"}
+            }, "required": ["parent", "children", "create_parent", "collection"], "additionalProperties": False}},
+            "transforms": {"type": "array", "maxItems": 120, "items": {"type": "object", "properties": {
+                "object": {"type": "string"}, "location": VECTOR3, "rotation_degrees": VECTOR3, "scale": VECTOR3
+            }, "required": ["object", "location", "rotation_degrees", "scale"], "additionalProperties": False}},
+            "mates": {"type": "array", "maxItems": 120, "items": {"type": "object", "properties": {
+                "object": {"type": "string"}, "target": {"type": "string"},
+                "object_anchor": BLENDER_ANCHOR, "target_anchor": BLENDER_ANCHOR,
+                "offset": VECTOR3, "tolerance": {"type": "number", "minimum": 0, "maximum": 1}
+            }, "required": ["object", "target", "object_anchor", "target_anchor", "offset", "tolerance"], "additionalProperties": False}},
+            "connectors": {"type": "array", "maxItems": 120, "items": {"type": "object", "properties": {
+                "name": {"type": "string"}, "shape": {"type": "string", "enum": ["cylinder", "box"]},
+                "from_object": {"type": "string"}, "from_anchor": BLENDER_ANCHOR, "start_offset": VECTOR3,
+                "to_object": {"type": "string"}, "to_anchor": BLENDER_ANCHOR, "end_offset": VECTOR3,
+                "radius": {"type": "number", "minimum": 0.001, "maximum": 5},
+                "width": {"type": "number", "minimum": 0.001, "maximum": 10},
+                "depth": {"type": "number", "minimum": 0.001, "maximum": 10},
+                "bevel": {"type": "number", "minimum": 0, "maximum": 1},
+                "collection": {"type": "string"}, "parent": {"type": "string"},
+                "color": {"type": "string"}, "material_family": {"type": "string", "enum": ["metal", "polymer", "rubber", "glass", "thermal_insulation", "regolith", "emissive"]},
+                "design_intent": {"type": "string"}
+            }, "required": ["name", "shape", "from_object", "from_anchor", "start_offset", "to_object", "to_anchor", "end_offset", "radius", "width", "depth", "bevel", "collection", "parent", "color", "material_family", "design_intent"], "additionalProperties": False}},
+            "modifiers": {"type": "array", "maxItems": 120, "items": {"type": "object", "properties": {
+                "object": {"type": "string"}, "name": {"type": "string"},
+                "type": {"type": "string", "enum": ["bevel", "solidify", "subdivision"]},
+                "amount": {"type": "number"}, "segments": {"type": "integer", "minimum": 1, "maximum": 6}
+            }, "required": ["object", "name", "type", "amount", "segments"], "additionalProperties": False}},
+            "geometry_additions": {"type": "array", "maxItems": 80, "description": "New authored geometry to add to the existing scene. Prefer extrude_profile, lathe_profile, curve_tube, or mesh over untouched primitives.", "items": ADVANCED_BLENDER_COMPONENT},
+            "geometry_replacements": {"type": "array", "maxItems": 80, "description": "Authored replacement geometry. Each component name must exactly match an existing object; ORION replaces that object's data while preserving its parent and collections.", "items": ADVANCED_BLENDER_COMPONENT},
+            "booleans": {"type": "array", "maxItems": 80, "items": {"type": "object", "properties": {
+                "target": {"type": "string"}, "cutter": {"type": "string"},
+                "operation": {"type": "string", "enum": ["DIFFERENCE", "UNION", "INTERSECT"]},
+                "apply": {"type": "boolean", "description": "Apply the modifier so the saved target topology actually changes."}
+            }, "required": ["target", "cutter", "operation", "apply"], "additionalProperties": False}},
+            "render_preview": {"type": "boolean"}, "save_open_document": {"type": "boolean"}, "confirmed": {"type": "boolean"}
+        }, "required": ["project_name", "file_path", "edit_scope", "parents", "transforms", "mates", "connectors", "modifiers", "geometry_additions", "geometry_replacements", "booleans", "render_preview", "save_open_document", "confirmed"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "blender_inspect_advanced_project",
+        "description": "Read the saved specification and design review for an existing ORION Blender project without changing or reopening it. Use for questions about object hierarchy, collections, components, materials, validation, design intent, or why the generated scene is structured a certain way.",
+        "parameters": {"type": "object", "properties": {
+            "project_name": {"type": "string", "description": "Exact project name, or empty for the newest ORION Blender project."}
+        }, "required": ["project_name"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
         "type": "function", "name": "blender_resume_advanced_project",
-        "description": "Resume the newest saved advanced Blender draft for an ORION-created project. Use this first for continue, retry, or finish-the-rover follow-ups; it retrieves the exact local specification and design brief without asking the user for a file path.",
+        "description": "Resume the newest saved advanced Blender draft for an ORION-created project. A rejected draft returns its complete stored correction list without blindly rebuilding identical invalid geometry; revise those issues in one new specification. Runtime-interrupted drafts can be rebuilt directly.",
         "parameters": {"type": "object", "properties": {
             "project_name": {"type": "string"}, "confirmed": {"type": "boolean"}
         }, "required": ["project_name", "confirmed"], "additionalProperties": False},
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "blender_revise_advanced_project",
+        "description": "Patch the newest saved ORION Blender specification in place while preserving every unaffected component and its existing approved design brief. Use after blender_resume_advanced_project returns revision_context, or whenever the user asks to fix/refine/rebuild an existing ORION advanced project. Add only missing components, replace only named defective components, and use the narrow intent/transform/material update lists for small changes. Never create a new design brief merely to revise existing work.",
+        "parameters": {"type": "object", "properties": {
+            "project_name": {"type": "string"},
+            "additions": {"type": "array", "maxItems": 60, "items": ADVANCED_BLENDER_COMPONENT},
+            "replacements": {"type": "array", "maxItems": 60, "items": ADVANCED_BLENDER_COMPONENT},
+            "remove_names": {"type": "array", "maxItems": 60, "items": {"type": "string"}},
+            "intent_updates": {"type": "array", "maxItems": 120, "items": {"type": "object", "properties": {
+                "name": {"type": "string"}, "design_intent": {"type": "string"}
+            }, "required": ["name", "design_intent"], "additionalProperties": False}},
+            "transform_updates": {"type": "array", "maxItems": 120, "items": {"type": "object", "properties": {
+                "name": {"type": "string"},
+                "dimensions": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                "location": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                "rotation": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
+            }, "required": ["name", "dimensions", "location", "rotation"], "additionalProperties": False}},
+            "material_updates": {"type": "array", "maxItems": 120, "items": {"type": "object", "properties": {
+                "name": {"type": "string"}, "color": {"type": "string"},
+                "material_family": {"type": "string", "enum": ["metal", "polymer", "rubber", "glass", "thermal_insulation", "regolith", "emissive"]},
+                "metallic": {"type": "number"}, "roughness": {"type": "number"},
+                "transmission": {"type": "number", "minimum": 0, "maximum": 1}, "emission": {"type": "number"}
+            }, "required": ["name", "color", "material_family", "metallic", "roughness", "transmission", "emission"], "additionalProperties": False}},
+            "boolean_additions": {"type": "array", "maxItems": 50, "items": {"type": "object", "properties": {
+                "target": {"type": "string"}, "cutter": {"type": "string"},
+                "operation": {"type": "string", "enum": ["DIFFERENCE", "UNION", "INTERSECT"]}
+            }, "required": ["target", "cutter", "operation"], "additionalProperties": False}},
+            "render": {"type": "boolean"}, "confirmed": {"type": "boolean"}
+        }, "required": ["project_name", "additions", "replacements", "remove_names", "intent_updates", "transform_updates", "material_updates", "boolean_additions", "render", "confirmed"], "additionalProperties": False},
         "strict": True,
     },
     {
@@ -793,7 +901,7 @@ TOOL_GROUPS = {
     "capabilities": {"capability_families_status", "objective_compile"},
     "google_workspace": {"objective_compile", "google_drive_search", "google_create_spreadsheet", "google_create_document", "google_create_presentation", "browser_navigate"},
     "software": {"install_application", "installation_status"},
-    "native_projects": {"__web_search__", "design_project_plan", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "blender_resume_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open", "desktop_inspect", "find_files", "open_application", "desktop_window_arrange"},
+    "native_projects": {"__web_search__", "design_project_plan", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "blender_inspect_advanced_project", "blender_inspect_existing_document", "blender_edit_existing_document", "blender_resume_advanced_project", "blender_revise_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open", "desktop_inspect", "desktop_accessibility_inspect", "desktop_local_ocr", "find_files", "open_application", "desktop_window_arrange"},
 }
 
 MUTATING_TOOLS = {
@@ -808,7 +916,7 @@ MUTATING_TOOLS = {
     "memory_store", "memory_forget", "orion_teach_workflow",
     "codex_generate", "generation_cancel",
     "google_create_spreadsheet", "google_create_document", "google_create_presentation",
-    "design_project_plan", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "blender_resume_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open",
+    "design_project_plan", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "blender_edit_existing_document", "blender_resume_advanced_project", "blender_revise_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project", "native_project_open",
     "project_session_start", "project_session_resume", "project_session_close",
 }
 
@@ -824,10 +932,11 @@ def is_action_evidence(name: str, arguments: dict, result: dict) -> bool:
     return name in MUTATING_TOOLS
 
 
-def select_definitions(request: str) -> list[dict]:
+def select_definitions(request: str, *, allow_mutation: bool = True) -> list[dict]:
     """Send only tools relevant to this turn, keeping prompts small and choices clear."""
     text = request.lower()
     selected: set[str] = set()
+    selected_groups: set[str] = set()
     routes = (
         (("spotify", "playlist", "song", "music", "track", "album", "artist"), "spotify"),
         (("github", "git ", "repository", "repo", "commit", "push", "branch"), "git"),
@@ -849,6 +958,7 @@ def select_definitions(request: str) -> list[dict]:
     for markers, group in routes:
         if any(marker in text for marker in markers):
             selected.update(TOOL_GROUPS[group])
+            selected_groups.add(group)
     objective = anticipation.analyze(request)
     if objective.get("action"):
         family_routes = {
@@ -860,10 +970,37 @@ def select_definitions(request: str) -> list[dict]:
         family = family_routes.get(str(objective.get("category", "")))
         if family:
             selected.update(TOOL_GROUPS[family])
+            selected_groups.add(family)
+    if "native_projects" in selected_groups:
+        # "new file" and "what should I refine next" must not expose reminders,
+        # email, Spotify, or unrelated artifact workers to the model.
+        selected.difference_update(TOOL_GROUPS["productivity"] - {"find_files"})
+        selected.difference_update(TOOL_GROUPS["spotify"])
+        selected.difference_update(TOOL_GROUPS["home"])
+        selected.difference_update(TOOL_GROUPS["google_workspace"] - {"browser_navigate"})
+    # A bounded edit to an existing Blender document is a semantic document
+    # operation. Keep unrelated desktop, productivity, home, and generation
+    # tools out of the lane so a recoverable GUI reload issue cannot turn into
+    # an open-ended screen-control loop.
+    new_native_project = any(marker in text for marker in (
+        "new project", "new blender file", "new file", "new scene", "from scratch",
+        "brand-new", "brand new", "do not reuse", "don't reuse", "separate project",
+    ))
+    existing_blender_edit = allow_mutation and not new_native_project and "blender" in text and any(marker in text for marker in (
+        "edit", "modify", "apply", "enact", "attach", "parent", "mate",
+        "reposition", "existing", "current project", "current document",
+    ))
+    if existing_blender_edit:
+        selected.intersection_update({
+            "blender_inspect_existing_document", "blender_edit_existing_document",
+            "blender_inspect_advanced_project", "native_project_open", "find_files",
+        })
     # Questions with no actionable signal need no tool schema at all. Current-data
     # questions keep a narrow web lane.
     if not selected and any(marker in text for marker in ("today", "current", "latest", "right now")):
         selected.update(TOOL_GROUPS["web"])
+    if not allow_mutation:
+        selected.difference_update(MUTATING_TOOLS)
     return [
         definition for definition in TOOL_DEFINITIONS
         if definition.get("name") in selected
@@ -1024,9 +1161,24 @@ def blender_create_advanced_project(**arguments) -> dict:
     return blender_advanced_worker.create_project(**arguments)
 
 
+def blender_inspect_existing_document(**arguments) -> dict:
+    import blender_existing_worker
+    return blender_existing_worker.inspect_document(**arguments)
+
+
+def blender_edit_existing_document(**arguments) -> dict:
+    import blender_existing_worker
+    return blender_existing_worker.edit_document(**arguments)
+
+
 def blender_resume_advanced_project(**arguments) -> dict:
     import blender_advanced_worker
     return blender_advanced_worker.resume_project(**arguments)
+
+
+def blender_revise_advanced_project(**arguments) -> dict:
+    import blender_advanced_worker
+    return blender_advanced_worker.revise_project(**arguments)
 
 
 def freecad_create_project(**arguments) -> dict:
@@ -1047,6 +1199,11 @@ def resolve_create_project(**arguments) -> dict:
 def native_project_open(application: str, project_name: str = "") -> dict:
     import project_workspace
     return project_workspace.open_project(application, project_name)
+
+
+def blender_inspect_advanced_project(project_name: str = "") -> dict:
+    import blender_advanced_worker
+    return blender_advanced_worker.inspect_project(project_name)
 
 
 def execute(name: str, arguments: dict, context: dict | None = None) -> dict:
@@ -1109,7 +1266,11 @@ def execute(name: str, arguments: dict, context: dict | None = None) -> dict:
         "blender_create_project": blender_create_project,
         "blender_refine_project": blender_refine_project,
         "blender_create_advanced_project": blender_create_advanced_project,
+        "blender_inspect_existing_document": blender_inspect_existing_document,
+        "blender_edit_existing_document": blender_edit_existing_document,
+        "blender_inspect_advanced_project": blender_inspect_advanced_project,
         "blender_resume_advanced_project": blender_resume_advanced_project,
+        "blender_revise_advanced_project": blender_revise_advanced_project,
         "freecad_create_project": freecad_create_project,
         "openscad_create_project": openscad_create_project,
         "resolve_create_project": resolve_create_project,
@@ -1129,7 +1290,7 @@ def execute(name: str, arguments: dict, context: dict | None = None) -> dict:
             "_request_id": str(context.get("request_id", "")),
             "_task_id": str(context.get("task_id", "")),
         })
-    if name in {"design_project_plan", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "blender_resume_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project"} and context:
+    if name in {"design_project_plan", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "blender_inspect_existing_document", "blender_edit_existing_document", "blender_resume_advanced_project", "blender_revise_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project"} and context:
         effective_arguments["_request_id"] = str(context.get("request_id", ""))
     result = execution_supervisor.execute(
         name,
@@ -1208,9 +1369,37 @@ def result_summary(name: str, arguments: dict, result: dict) -> str:
     if name == "blender_refine_project":
         opened = " and reopened it" if result.get("opened") else ""
         return f"I refined and rerendered {result.get('project')}{opened} in Blender."
-    if name in {"blender_create_advanced_project", "blender_resume_advanced_project"}:
-        opened = " and opened it" if result.get("opened") else ""
-        return f"I procedurally modeled, verified, and rendered {result.get('project')}{opened} in Blender."
+    if name in {"blender_create_advanced_project", "blender_resume_advanced_project", "blender_revise_advanced_project"}:
+        review = result.get("design_review") or {}
+        concept = str(review.get("selected_concept", "")).strip()
+        component_count = int(review.get("visible_components", 0) or 0)
+        collections = [str(item) for item in review.get("functional_collections", [])]
+        details = []
+        if concept:
+            details.append(f"using the {concept} concept")
+        if component_count:
+            details.append(f"with {component_count} visible authored components")
+        if collections:
+            details.append(f"organized across {len(collections)} functional systems")
+        design = (" " + ", ".join(details) + ".") if details else ""
+        opened = " The exact editable project is open in Blender." if result.get("loaded") else ""
+        revision = result.get("revision") or {}
+        revision_text = ""
+        if revision:
+            revision_text = f" I preserved {revision.get('preserved_components', 0)} existing components and changed only the requested or failed parts."
+        return f"I completed and verified {result.get('project')} in Blender.{design}{revision_text} The geometry, assembly, wheel contact, clearances, material separation, and camera framing passed the automated review.{opened}"
+    if name == "blender_edit_existing_document":
+        audit = result.get("audit") or {}
+        reload_text = (
+            "The exact edited file is open in Blender."
+            if result.get("loaded")
+            else "The saved document is verified; the visible Blender reload could not be confirmed."
+        )
+        return (
+            f"I edited the existing {result.get('project')} Blender document in place, "
+            f"verified {len(audit.get('changes', []))} object-level changes, preserved a backup, "
+            f"and independently checked the saved file. {reload_text}"
+        )
     if name == "install_application":
         application = result.get("application") or arguments.get("application") or "The application"
         if result.get("status") == "installed":

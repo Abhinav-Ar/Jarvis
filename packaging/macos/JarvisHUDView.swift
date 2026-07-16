@@ -38,6 +38,15 @@ final class OrionPromptTextView: NSTextView {
         needsDisplay = true
     }
 
+    override func mouseDown(with event: NSEvent) {
+        // The full-screen HUD normally passes clicks through. Once the pointer
+        // reaches the composer, explicitly reclaim key focus so the field works
+        // after every submission—not only after the menu command opened it.
+        window?.makeKey()
+        window?.makeFirstResponder(self)
+        super.mouseDown(with: event)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         if string.isEmpty && window?.firstResponder !== self {
@@ -59,14 +68,15 @@ final class JarvisHUDView: NSView {
     var goal = ""
     var steps: [String] = []
     var messages: [[String: String]] = [] { didSet { if messages.count != oldValue.count { chatOffset = 0 } } }
-    var actions: [[String: String]] = [] { didSet { if actions.count != oldValue.count { actionOffset = 0 } } }
+    var actions: [[String: String]] = [] { didSet { if actions.count != oldValue.count { intelligenceOffset = 0 } } }
     var eventCount = 0
+    var currentStep = 0
     var backgroundLuminance: CGFloat = 0.25
     private var phase: CGFloat = 0
     private var chatOffset: CGFloat = 0
-    private var actionOffset: CGFloat = 0
+    private var intelligenceOffset: CGFloat = 0
     private var chatMaximum: CGFloat = 0
-    private var actionMaximum: CGFloat = 0
+    private var intelligenceMaximum: CGFloat = 0
     private var animationTimer: Timer?
     var onSubmitCommand: ((String) -> Void)?
     var onCancelCommand: (() -> Void)?
@@ -173,10 +183,11 @@ final class JarvisHUDView: NSView {
     override func scrollWheel(with event: NSEvent) {
         let location = convert(event.locationInWindow, from: nil)
         let amount = event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 1.0 : 8.0)
-        if location.y > bounds.height * 0.43 {
+        let rects = layoutRects()
+        if rects.chat.contains(location) {
             chatOffset = min(chatMaximum, max(0, chatOffset + amount))
-        } else {
-            actionOffset = min(actionMaximum, max(0, actionOffset + amount))
+        } else if rects.path.contains(location) {
+            intelligenceOffset = min(intelligenceMaximum, max(0, intelligenceOffset + amount))
         }
         needsDisplay = true
     }
@@ -245,7 +256,7 @@ final class JarvisHUDView: NSView {
     }
 
     private func drawConversation(_ rect: NSRect) {
-        section(rect, title: "LIVE COMMAND CHANNEL", badge: messages.count > 1 ? "SCROLL" : "LIVE")
+        section(rect, title: "LIVE COMMAND CHANNEL", badge: chatMaximum > 0 ? "SCROLL" : "LIVE")
         let composer = composerRect(in: rect)
         rounded(composer, radius: 10, fill: NSColor.black.withAlphaComponent(0.76), stroke: accent.withAlphaComponent(0.72), width: 1.2)
         promptScroll.layer?.borderColor = accent.withAlphaComponent(isComposerFocused ? 0.95 : 0.48).cgColor
@@ -280,63 +291,102 @@ final class JarvisHUDView: NSView {
         NSGraphicsContext.restoreGraphicsState()
     }
 
-    private func drawActions(_ rect: NSRect) {
-        section(rect, title: "EXECUTION TELEMETRY", badge: "\(actions.count) EVENTS")
-        let viewport = NSRect(x: rect.minX + 10, y: rect.minY + 10, width: rect.width - 20, height: rect.height - 49)
-        NSGraphicsContext.saveGraphicsState()
-        NSBezierPath(rect: viewport).addClip()
-        let rowHeight: CGFloat = 58
-        actionMaximum = max(0, CGFloat(actions.count) * (rowHeight + 7) - viewport.height)
-        actionOffset = min(actionOffset, actionMaximum)
-        var y = viewport.maxY - CGFloat(actions.count) * (rowHeight + 7) + actionOffset
-        for action in actions {
+    private func drawPath(_ rect: NSRect) {
+        let focus = steps.isEmpty ? 0 : min(max(0, currentStep), steps.count - 1)
+        // An open, angular trace surface reads like part of the HUD rather than
+        // another application panel. Information flows down one luminous spine.
+        let cut: CGFloat = 15
+        let shell = NSBezierPath()
+        shell.move(to: NSPoint(x: rect.minX + cut, y: rect.minY))
+        shell.line(to: NSPoint(x: rect.maxX - cut * 2, y: rect.minY))
+        shell.line(to: NSPoint(x: rect.maxX, y: rect.minY + cut * 1.4))
+        shell.line(to: NSPoint(x: rect.maxX, y: rect.maxY - cut))
+        shell.line(to: NSPoint(x: rect.maxX - cut, y: rect.maxY))
+        shell.line(to: NSPoint(x: rect.minX + cut * 2, y: rect.maxY))
+        shell.line(to: NSPoint(x: rect.minX, y: rect.maxY - cut * 1.4))
+        shell.line(to: NSPoint(x: rect.minX, y: rect.minY + cut))
+        shell.close()
+        NSColor.black.withAlphaComponent(backgroundLuminance > 0.58 ? 0.82 : 0.48).setFill(); shell.fill()
+        accent.withAlphaComponent(0.72).setStroke(); shell.lineWidth = 1.2; shell.stroke()
+        let headerLine = NSBezierPath()
+        headerLine.move(to: NSPoint(x: rect.minX + 18, y: rect.maxY - 39))
+        headerLine.line(to: NSPoint(x: rect.maxX - 18, y: rect.maxY - 39))
+        accent.withAlphaComponent(0.34).setStroke(); headerLine.lineWidth = 1; headerLine.stroke()
+        text("EXECUTION TRACE", at: NSPoint(x: rect.minX + 20, y: rect.maxY - 27), size: 10, color: accent, weight: .bold)
+        let traceState = steps.isEmpty ? "STANDBY" : "VECTOR \(focus + 1) / \(steps.count)"
+        text(intelligenceMaximum > 0 ? "SCROLL  //  \(traceState)" : "LIVE  //  \(traceState)", at: NSPoint(x: rect.maxX - 145, y: rect.maxY - 27), size: 7.5, color: NSColor.white.withAlphaComponent(0.48), weight: .medium)
+        let latest = actions.last
+        let latestResult = cleaned((latest?["result"]?.isEmpty == false) ? latest!["result"]! : (latest?["target"] ?? ""))
+        var entries: [(String, String, NSColor)] = [
+            ("ACTIVE VECTOR", (steps.isEmpty ? (label.isEmpty ? "Waiting for a task" : label) : steps[focus]) + (detail.isEmpty ? "" : "\n" + cleaned(detail)), accent),
+            ("OBJECTIVE", goal.isEmpty ? "Maintain verified control of the active task." : cleaned(goal), .white.withAlphaComponent(0.70)),
+            ("NEXT VECTOR", focus + 1 < steps.count ? steps[focus + 1] : "Deliver the verified result and surface any remaining limitation.", userColor),
+        ]
+        for (index, action) in actions.suffix(14).enumerated() {
             let status = action["status"] ?? "running"
             let color: NSColor = status == "complete" ? jarvisColor : status == "failed" ? .systemRed : accent
-            let row = NSRect(x: viewport.minX, y: y, width: viewport.width, height: rowHeight)
-            if row.maxY >= viewport.minY && row.minY <= viewport.maxY {
-                rounded(row, radius: 9, fill: color.withAlphaComponent(status == "running" ? 0.20 : 0.09), stroke: color.withAlphaComponent(0.62))
-                text(status == "complete" ? "✓" : status == "failed" ? "×" : "▶", at: NSPoint(x: row.minX + 11, y: row.maxY - 25), size: 14, color: color, weight: .bold)
-                block(action["label"] ?? "ACTION", in: NSRect(x: row.minX + 34, y: row.maxY - 27, width: row.width - 46, height: 18), size: 10, color: .white, weight: .bold)
-                let result = (action["result"]?.isEmpty == false) ? action["result"]! : (action["target"] ?? "")
-                block(result, in: NSRect(x: row.minX + 34, y: row.minY + 9, width: row.width - 46, height: 19), size: 9, color: NSColor.white.withAlphaComponent(0.68))
-            }
-            y += rowHeight + 7
+            let signal = status == "complete" ? "✓" : status == "failed" ? "×" : "▶"
+            let duration = action["duration"] ?? ""
+            let title = "\(signal) SIGNAL \(String(format: "%02d", index + 1))  //  \(action["label"] ?? "ACTION")" + (duration.isEmpty ? "" : "  //  \(duration)")
+            let result = cleaned((action["result"]?.isEmpty == false) ? action["result"]! : (action["target"] ?? "Awaiting result"))
+            entries.append((title, result, color))
         }
-        if actions.isEmpty { text("WAITING FOR AUTHORIZED ACTIONS", at: NSPoint(x: viewport.minX + 8, y: viewport.midY), size: 9, color: NSColor.white.withAlphaComponent(0.48)) }
+        if actions.isEmpty {
+            entries.append(("SIGNAL STREAM", latestResult.isEmpty ? "Awaiting the first verified action." : latestResult, jarvisColor))
+        }
+        let viewport = NSRect(x: rect.minX + 14, y: rect.minY + 10, width: rect.width - 28, height: rect.height - 55)
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: viewport).addClip()
+        var total: CGFloat = 0
+        let prepared = entries.map { entry -> (String, String, NSColor, CGFloat) in
+            let height = max(43, measured(entry.1, width: viewport.width - 62, size: 8.8) + 24)
+            total += height + 9
+            return (entry.0, entry.1, entry.2, height)
+        }
+        intelligenceMaximum = max(0, total - viewport.height)
+        intelligenceOffset = min(intelligenceOffset, intelligenceMaximum)
+        var y = viewport.maxY - total + intelligenceOffset
+        let spineX = viewport.minX + 14
+        let spine = NSBezierPath()
+        spine.move(to: NSPoint(x: spineX, y: viewport.minY))
+        spine.line(to: NSPoint(x: spineX, y: viewport.maxY))
+        accent.withAlphaComponent(0.24).setStroke(); spine.lineWidth = 1.4; spine.stroke()
+        for (index, entry) in prepared.enumerated() {
+            let (title, value, color, height) = entry
+            let row = NSRect(x: viewport.minX, y: y, width: viewport.width, height: height)
+            if row.maxY >= viewport.minY && row.minY <= viewport.maxY {
+                let nodeCenter = NSPoint(x: spineX, y: row.maxY - 15)
+                if index == 0 {
+                    for radius in [CGFloat(10), CGFloat(6)] {
+                        let glow = NSBezierPath(ovalIn: NSRect(x: nodeCenter.x - radius, y: nodeCenter.y - radius, width: radius * 2, height: radius * 2))
+                        color.withAlphaComponent(radius == 10 ? 0.10 : 0.20).setFill(); glow.fill()
+                    }
+                }
+                let node = NSBezierPath(ovalIn: NSRect(x: nodeCenter.x - 3.5, y: nodeCenter.y - 3.5, width: 7, height: 7))
+                color.setFill(); node.fill()
+                let vector = NSBezierPath()
+                vector.move(to: NSPoint(x: spineX + 7, y: nodeCenter.y))
+                vector.line(to: NSPoint(x: spineX + 27, y: nodeCenter.y))
+                color.withAlphaComponent(0.56).setStroke(); vector.lineWidth = 1.1; vector.stroke()
+                text(title, at: NSPoint(x: spineX + 34, y: row.maxY - 19), size: 7.5, color: color, weight: .bold)
+                block(value, in: NSRect(x: spineX + 34, y: row.minY + 6, width: row.width - 54, height: row.height - 27), size: 8.8, color: .white, weight: index == 0 ? .bold : .regular)
+            }
+            y += height + 9
+        }
         NSGraphicsContext.restoreGraphicsState()
     }
 
-    private func drawPath(_ rect: NSRect) {
-        section(rect, title: "EXECUTION PATH", badge: steps.isEmpty ? "READY" : "\(min(eventCount, steps.count))/\(steps.count)")
-        let visible = Array(steps.suffix(4))
-        var y = rect.maxY - 53
-        for (index, step) in visible.enumerated() {
-            let originalIndex = max(0, steps.count - visible.count) + index
-            let done = originalIndex < eventCount
-            let active = originalIndex == min(eventCount, max(0, steps.count - 1))
-            let color = done ? jarvisColor : active ? accent : NSColor.white.withAlphaComponent(0.34)
-            let marker = done ? "✓" : active ? "▶" : "○"
-            text(marker, at: NSPoint(x: rect.minX + 16, y: y), size: 10, color: color, weight: .bold)
-            block(step, in: NSRect(x: rect.minX + 36, y: y - 2, width: rect.width - 50, height: 26), size: 9, color: active ? .white : NSColor.white.withAlphaComponent(0.65), weight: active ? .bold : .regular)
-            y -= 31
-        }
-        if steps.isEmpty { text("NO ACTIVE DEPENDENCIES", at: NSPoint(x: rect.minX + 16, y: rect.midY), size: 9, color: NSColor.white.withAlphaComponent(0.42)) }
-    }
-
-    private func layoutRects() -> (rail: NSRect, chat: NSRect, actions: NSRect, path: NSRect) {
+    private func layoutRects() -> (rail: NSRect, chat: NSRect, path: NSRect) {
         let compact = bounds.width < 1800 || bounds.height < 1000
         let margin: CGFloat = compact ? 18 : 32
         let chatWidth = min(compact ? 610 : 900, bounds.width * (compact ? 0.43 : 0.46))
-        let rail = NSRect(x: margin, y: bounds.maxY - margin - 48, width: chatWidth, height: 48)
+        let rail = NSRect(x: margin, y: bounds.maxY - margin - 78, width: chatWidth, height: 78)
         let chatHeight = min(compact ? 245 : 385, bounds.height * (compact ? 0.29 : 0.34))
         let chat = NSRect(x: margin, y: rail.minY - 10 - chatHeight, width: chatWidth, height: chatHeight)
-        let actionWidth = min(compact ? 475 : 650, bounds.width * 0.36)
-        let actionHeight = min(compact ? 178 : 280, bounds.height * 0.25)
-        let actionsRect = NSRect(x: margin, y: margin, width: actionWidth, height: actionHeight)
-        let pathWidth = min(compact ? 500 : 700, bounds.width * 0.37)
-        let pathHeight = min(compact ? 155 : 235, bounds.height * 0.21)
+        let pathWidth = min(compact ? 620 : 900, bounds.width * (compact ? 0.47 : 0.49))
+        let pathHeight = min(compact ? 275 : 360, bounds.height * (compact ? 0.31 : 0.30))
         let path = NSRect(x: bounds.maxX - margin - pathWidth, y: margin, width: pathWidth, height: pathHeight)
-        return (rail, chat, actionsRect, path)
+        return (rail, chat, path)
     }
 
     private func composerRect(in chat: NSRect) -> NSRect {
@@ -346,6 +396,12 @@ final class JarvisHUDView: NSView {
 
     func containsComposerPoint(_ point: NSPoint) -> Bool {
         composerRect(in: layoutRects().chat).contains(point)
+    }
+
+    func containsScrollablePoint(_ point: NSPoint) -> Bool {
+        let rects = layoutRects()
+        let conversationHistory = rects.chat.contains(point) && !composerRect(in: rects.chat).contains(point)
+        return conversationHistory || rects.path.contains(point)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -388,19 +444,16 @@ final class JarvisHUDView: NSView {
         let rail = rects.rail
         rounded(rail, radius: 11, fill: NSColor.black.withAlphaComponent(backgroundLuminance > 0.58 ? 0.88 : 0.62), stroke: a.withAlphaComponent(0.88), width: 1.5)
         text("ORION // \(state.uppercased())", at: NSPoint(x: rail.minX + 14, y: rail.maxY - 23), size: 11, color: a, weight: .bold)
-        text(label.uppercased(), at: NSPoint(x: rail.minX + 14, y: rail.minY + 8), size: 9, color: .white, weight: .bold)
+        block(label.uppercased(), in: NSRect(x: rail.minX + 14, y: rail.maxY - 45, width: rail.width - 48, height: 17), size: 9, color: .white, weight: .bold)
+        if !detail.isEmpty {
+            block(cleaned(detail), in: NSRect(x: rail.minX + 14, y: rail.minY + 9, width: rail.width - 28, height: 22), size: 8, color: NSColor.white.withAlphaComponent(0.68))
+        }
         let pulseX = rail.maxX - 24 - CGFloat(Int(phase * 35) % max(1, Int(rail.width - 48)))
         let pulse = NSBezierPath(ovalIn: NSRect(x: pulseX, y: rail.midY - 3, width: 6, height: 6))
         a.setFill(); pulse.fill()
 
         drawConversation(rects.chat)
-        drawActions(rects.actions)
         drawPath(rects.path)
-
-        if !detail.isEmpty {
-            let detailRect = NSRect(x: 18, y: rail.midY - 7, width: rail.width - 145, height: 15)
-            block(detail, in: detailRect, size: 8, color: NSColor.white.withAlphaComponent(0.62))
-        }
 
         let scanY = bounds.height * (0.18 + 0.64 * ((sin(phase * 0.42) + 1) / 2))
         let scan = NSBezierPath(); scan.move(to: NSPoint(x: 20, y: scanY)); scan.line(to: NSPoint(x: bounds.maxX - 20, y: scanY))

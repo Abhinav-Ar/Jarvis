@@ -480,10 +480,16 @@ provide a complete lifetime listening ledger.
 
 ## Project layout
 
-- `jarvis.py` — command-line loop and hotword behavior
-- `audio.py` — microphone phrase capture and silence detection
-- `assist.py` — OpenAI conversation, transcription, TTS, and tool orchestration
-- `tools.py` — tool schemas, weather, search, and dispatch
-- `mac_tools.py` — bounded native macOS and Apple-app actions
-- `integrations.py` — Todoist and Home Assistant
-- `spot.py` — lazy Spotify OAuth and playback control
+- `src/orion/` — the complete Python runtime: orchestration, local state,
+  integrations, native workers, recovery, and command entrypoints
+- `packaging/macos/` — Swift HUD/menu sources, bundle metadata, and launchd files
+- `scripts/` — setup, launch, validation, deployment, and removal operations
+- `tests/` — unit and regression coverage for every capability family
+- `docs/` — architecture and development workflow documentation
+- `.github/workflows/` — automated macOS verification
+- `jarvis.py`, `orion.py`, and the root shell commands — compatibility launchers;
+  product implementation does not belong at the repository root
+
+Run `./scripts/check.sh` before installing a background build. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and
+[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for ownership and delivery rules.

@@ -539,7 +539,7 @@ class AgentPlatform:
             "create_email_draft", "git_commit", "git_commit_and_push", "git_push",
             "desktop_action", "desktop_accessibility_set", "desktop_accessibility_press",
             "install_application",
-            "blender_create_project", "blender_create_advanced_project", "blender_resume_advanced_project", "blender_refine_project",
+            "blender_create_project", "blender_create_advanced_project", "blender_edit_existing_document", "blender_resume_advanced_project", "blender_revise_advanced_project", "blender_refine_project",
             "freecad_create_project", "openscad_create_project", "resolve_create_project",
             "design_project_plan",
         }:

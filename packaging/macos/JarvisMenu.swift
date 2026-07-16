@@ -352,6 +352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         var goal = ""
         var steps: [String] = []
         var events = 0
+        var currentStep = 0
         var messages: [[String: String]] = []
         var actions: [[String: String]] = []
         var planUpdated: Double = 0
@@ -363,6 +364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                 steps = plan["steps"] as? [String] ?? []
             }
             events = (task["events"] as? [[String: Any]])?.count ?? 0
+            currentStep = task["current_step"] as? Int ?? 0
             planUpdated = task["updated_at"] as? Double ?? 0
         }
         if let data = try? Data(contentsOf: uiPlanFile),
@@ -388,6 +390,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
                     "target": item["target"] as? String ?? "",
                     "status": status,
                     "result": item["result"] as? String ?? "",
+                    "duration": ((item["duration_ms"] as? Int).map { value in value >= 1000 ? String(format: "%.1fs", Double(value) / 1000.0) : "\(value)ms" }) ?? "",
                 ]
             }
         }
@@ -398,6 +401,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         hudView?.goal = goal
         hudView?.steps = steps
         hudView?.eventCount = max(events, actions.count)
+        hudView?.currentStep = currentStep
         hudView?.messages = messages
         hudView?.actions = actions
         hudView?.backgroundLuminance = sampledLuminance
@@ -473,11 +477,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             hud?.ignoresMouseEvents = true
             return
         }
+        let local = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
+        let hoverInteraction = view.containsScrollablePoint(local)
+        if hoverInteraction {
+            panel.ignoresMouseEvents = false
+            return
+        }
         guard textInputActive else {
             panel.ignoresMouseEvents = true
             return
         }
-        let local = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
         panel.ignoresMouseEvents = !view.containsComposerPoint(local)
     }
 
@@ -536,7 +545,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             writeActivityState("error", "Couldn’t send", error.localizedDescription)
             NSSound.beep()
         }
-        restoreFocusAfterTextInput()
+        // Keep the composer armed for the rest of the active ORION session.
+        // Yield keyboard focus back to the user's application, but allow the
+        // field to reclaim it on the next click without reopening the menu.
+        textInputActive = true
+        hud?.makeFirstResponder(nil)
+        hud?.resignKey()
+        applicationBeforeTextInput?.activate(options: [])
+        updateHUDInteraction()
         refreshStatus()
     }
 

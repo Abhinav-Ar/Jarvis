@@ -132,14 +132,106 @@ class AssistantTests(unittest.TestCase):
 
     def test_punctuated_followup_reuses_local_tool_lane(self):
         answer = SimpleNamespace(id="r3", output=[], output_text="I checked it.")
+        audit = SimpleNamespace(id="r3-audit", output=[], output_text="I checked it.")
         assistant = JarvisAssistant()
         self.bypass_planner(assistant)
         assistant.last_selected_tools = [{"type": "function", "name": "git_status"}]
-        fake = FakeResponses([answer])
+        fake = FakeResponses([answer, audit])
         assistant.client = SimpleNamespace(responses=fake)
 
-        self.assertEqual(assistant.ask("Local time: now\nUser: Yeah, do it."), "I checked it.")
+        self.assertIn("no action ran", assistant.ask("Local time: now\nUser: Yeah, do it."))
         self.assertEqual(fake.calls[0]["tools"], assistant.last_selected_tools)
+
+    def test_affirmative_native_followup_exposes_existing_blender_editor(self):
+        answer = SimpleNamespace(id="r4", output=[], output_text="Continuing the edit.")
+        audit = SimpleNamespace(id="r4-audit", output=[], output_text="Continuing the edit.")
+        assistant = JarvisAssistant()
+        self.bypass_planner(assistant)
+        assistant.active_native_project = {
+            "application": "Blender", "project": "Autonomous Lunar Cargo Rover",
+            "folder": "", "draft_path": "", "design_brief_id": "", "status": "verified",
+        }
+        fake = FakeResponses([answer, audit])
+        assistant.client = SimpleNamespace(responses=fake)
+
+        self.assertIn("no action ran", assistant.ask("Sure, do all of that that you just told me."))
+        names = {definition.get("name", definition.get("type")) for definition in fake.calls[0]["tools"]}
+        self.assertIn("blender_inspect_existing_document", names)
+        self.assertIn("blender_edit_existing_document", names)
+
+    def test_direct_native_file_display_bypasses_model_indecision(self):
+        assistant = JarvisAssistant()
+        self.bypass_planner(assistant)
+        assistant.task_engine.mutation_requested = True
+        assistant.active_native_project = {
+            "application": "Blender", "project": "Autonomous Lunar Cargo Rover",
+            "folder": "", "draft_path": "", "design_brief_id": "", "status": "verified",
+        }
+        with patch("assist.tools.execute", return_value={
+            "ok": True, "loaded": True, "application": "Blender", "project": "Autonomous Lunar Cargo Rover",
+        }) as execute:
+            answer = assistant.ask("I'm telling you to display the rover file, please.", request_id="display-test")
+        self.assertIn("opened", answer.lower())
+        execute.assert_called_once()
+        self.assertEqual(execute.call_args.args[0], "native_project_open")
+
+    def test_new_blender_design_clears_stale_project_and_cannot_direct_open_it(self):
+        assistant = JarvisAssistant()
+        self.bypass_planner(assistant)
+        assistant.active_native_project = {
+            "application": "Blender", "project": "Autonomous Lunar Cargo Rover",
+            "folder": "", "draft_path": "", "design_brief_id": "", "status": "verified",
+        }
+        assistant.previous_response_id = "rover-response"
+        assistant.local_session_turns = [{"user": "Fix the rover", "assistant": "Done"}]
+        answer = SimpleNamespace(id="new-project", output=[], output_text="I need to create the new mount.")
+        audit = SimpleNamespace(id="new-project-audit", output=[], output_text="No artifact exists yet.")
+        fake = FakeResponses([answer, audit])
+        assistant.client = SimpleNamespace(responses=fake)
+        request = (
+            "It is a UCS Venator on drywall studs. Design this in Blender for me "
+            "and open a new file."
+        )
+        with tempfile.TemporaryDirectory() as folder, patch.object(
+            __import__("assist").activity, "RUNTIME", Path(folder)
+        ), patch("assist.tools.execute") as execute:
+            assistant.ask(request, request_id="new-project-test")
+        execute.assert_not_called()
+        self.assertEqual(assistant.active_native_project, {})
+        self.assertIsNone(fake.calls[0].get("previous_response_id"))
+        names = {definition.get("name", definition.get("type")) for definition in fake.calls[0]["tools"]}
+        self.assertIn("blender_create_advanced_project", names)
+
+    def test_engineering_project_switch_is_scoped_by_identity(self):
+        rover = {"application": "Blender", "project": "Autonomous Lunar Cargo Rover"}
+        self.assertTrue(JarvisAssistant._starts_new_engineering_project(
+            "Design wall clamps for my UCS Venator", rover,
+        ))
+        self.assertTrue(JarvisAssistant._starts_new_engineering_project(
+            "Open a new Blender file for a mounting fixture", rover,
+        ))
+        self.assertFalse(JarvisAssistant._starts_new_engineering_project(
+            "Design a new axle for the rover project", rover,
+        ))
+        self.assertTrue(JarvisAssistant._is_direct_native_open_request(
+            "I'm telling you to display the rover file, please.",
+        ))
+        self.assertFalse(JarvisAssistant._is_direct_native_open_request(
+            "Design this in Blender and open a new file.",
+        ))
+        self.assertFalse(JarvisAssistant._references_active_project(
+            "Open the Venator mounting project", rover,
+        ))
+
+    def test_vague_quality_language_inherits_active_engineering_project(self):
+        project = {"application": "Blender", "project": "UCS Venator Wall Mount"}
+        self.assertTrue(JarvisAssistant._implies_active_project_refinement(
+            "This is a good start, but it still feels too basic and is not production ready.",
+            project,
+        ))
+        self.assertFalse(JarvisAssistant._implies_active_project_refinement(
+            "This movie was a good start for the franchise.", {},
+        ))
 
     def test_function_call_result_is_sent_back(self):
         tool_call = SimpleNamespace(

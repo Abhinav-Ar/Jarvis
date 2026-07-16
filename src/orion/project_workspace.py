@@ -17,6 +17,35 @@ import mac_tools
 ROOT = Path(os.getenv("ORION_PROJECTS_DIR", str(Path.home() / "Documents/ORION Projects")))
 
 
+def write_recovery(
+    folder: Path, manifest: dict, *, stage: str, status: str, draft_path: Path,
+    issues: list[dict], repairs: list[str], next_action: str,
+) -> Path:
+    """Atomically persist the minimum state needed to resume without re-planning."""
+    path = folder / "recovery-state.json"
+    previous = {}
+    try:
+        previous = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        pass
+    history = list(previous.get("history", []))[-19:]
+    history.append({
+        "time": time.time(), "stage": stage, "status": status,
+        "issues": issues, "repairs": repairs, "next_action": next_action,
+    })
+    payload = {
+        "version": 1, "project": manifest.get("project", ""),
+        "application": manifest.get("application", ""), "request_id": manifest.get("request_id", ""),
+        "job_id": manifest.get("job_id", ""), "stage": stage, "status": status,
+        "draft_path": str(draft_path), "issues": issues, "repairs": repairs,
+        "next_action": next_action, "updated_at": time.time(), "history": history,
+    }
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temporary.replace(path)
+    return path
+
+
 def require_confirmation(confirmed: bool, application: str) -> dict | None:
     if confirmed:
         return None
@@ -57,6 +86,10 @@ def progress(manifest: dict, folder: Path, phase: str, step: int, detail: str = 
         phase, status="running", step=step, total_steps=total_steps, detail=detail,
         route="native_worker",
     )
+    activity.update(
+        "verifying" if step >= max(2, total_steps - 1) else "working",
+        phase, f"Step {step} of {total_steps}" + (f" • {detail}" if detail else ""),
+    )
     diagnostics.event(
         "native_project_phase", request_id=manifest.get("request_id", ""),
         job_id=manifest["job_id"], application=manifest["application"], phase=phase, step=step,
@@ -81,6 +114,13 @@ def finish(manifest: dict, folder: Path, artifacts: list[Path], error: str = "")
         total_steps=int(manifest.get("total_steps", 4)),
         detail=f"{len(verified)} artifacts ready" if ok else (error or "Artifact verification failed")[:180],
         route="native_worker",
+    )
+    activity.update(
+        "verifying" if ok else "error",
+        "Native project verified" if ok else "Quality gate stopped the build",
+        f"{len(verified)} artifacts verified"
+        if ok
+        else (error or "Artifact verification failed").replace("\n", " • ")[:180],
     )
     diagnostics.event(
         "native_project_finished", level="info" if ok else "error",

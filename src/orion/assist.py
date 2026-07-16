@@ -124,7 +124,26 @@ Use blender_create_advanced_project for researched product concepts, vehicles,
 architecture, machinery, environments, and detailed visual models. Use
 blender_create_project only when the user explicitly wants a quick simple blockout.
 Use blender_resume_advanced_project first when the user asks to continue, retry, or
-finish an advanced Blender project ORION previously attempted.
+finish an advanced Blender project ORION previously attempted. When it returns a
+revision context, use blender_revise_advanced_project to patch that saved scene in
+place. Preserve its design_brief_id and every unaffected component. Never call
+design_project_plan again for an existing ORION project unless the user explicitly
+asks to discard or replace the original design direction.
+Recipe revision is not the same as editing an existing Blender document. When the
+user asks to edit, apply, enact, attach, mate, reposition, or modify objects already
+inside an open or saved .blend, first call blender_inspect_existing_document. Use
+its exact object names, transforms, world bounds, collections, and parents to plan
+the smallest change, then call blender_edit_existing_document. That tool edits the
+same .blend, creates a backup, verifies declared geometry and assembly relationships,
+and reloads the edited file. Classify the edit scope by the user's requested outcome,
+not by the easiest available operation. Reshape, remodel, add-detail, repair-visible-
+geometry, and make-more-realistic requests require geometry_revision with authored
+geometry additions, named replacements, or applied booleans. Structural repair must
+include a physical connector or authored geometry. Parenting, transforms, anchor
+mates, and modifiers alone cannot satisfy either scope. Never answer with another plan after the user has asked
+to enact it. Its timestamped backup is built into the edit operation; never claim a
+separate backup or write tool is missing when blender_edit_existing_document is
+available. Never claim an existing document changed from inspection or recipe data.
 Use FreeCAD or OpenSCAD—not Blender alone—for dimensional functional parts and 3D
 prints. FreeCAD supports profiles, revolves, placements, fillets, and constructive
 booleans; OpenSCAD supports code-driven parametric solids. A printable design must
@@ -150,6 +169,11 @@ blockout, revise the specification and run the worker again rather than defendin
 weak first result. Be candid that automated
 geometry and mesh checks do not replace human visual critique, structural analysis,
 or slicer validation for a fabricated part.
+Native Blender workers build in the background and open the exact finished project
+themselves. Do not arrange, open, or inspect Blender before that worker completes;
+doing so wastes time and can target a stale window. A successful advanced worker
+result whose design review passed, exact file was verified, and project was loaded
+is terminal evidence. Do not request another screen audit after that contract passes.
 Treat colored neon/RGB/accent lighting as a physical fixture or emissive strip by
 default, with neutral general illumination. Never represent a requested light as
 an arbitrary floating sphere or color-wash every material. For a follow-up change
@@ -162,6 +186,9 @@ editable artifact to be opened and verified in the native application's window.
 When a native worker returns `resumable`, its draft path and design brief are the
 authoritative continuation state. Revise that draft's complete validation list in
 one pass and retry; never ask the user to locate a project ORION created or attempted.
+Do not call the resume tool immediately after a worker has just rejected that same
+specification—the rejection already contains the authoritative issue list, and an
+unchanged rebuild cannot improve it.
 Use screen inspection and desktop actions only as a fallback when no semantic tool
 can do the job. Text the user explicitly asked you to type is confirmed, but typing
 does not authorize submitting it. If an app fails to become frontmost, retry using
@@ -282,20 +309,6 @@ class OrionAssistant:
             value = json.loads(path.read_text(encoding="utf-8"))
             return {str(key): str(item) for key, item in value.items()} if isinstance(value, dict) else {}
         except (OSError, ValueError, TypeError):
-            pass
-        try:
-            import project_workspace
-            manifests = list(project_workspace.ROOT.glob("*/*/orion-project.json")) if project_workspace.ROOT.is_dir() else []
-            latest = max(manifests, key=lambda item: item.stat().st_mtime)
-            manifest = json.loads(latest.read_text(encoding="utf-8"))
-            return {
-                "application": str(manifest.get("application", latest.parent.name)),
-                "project": str(manifest.get("project", latest.parent.parent.name)),
-                "folder": str(latest.parent), "draft_path": "",
-                "design_brief_id": str(manifest.get("design_brief_id", "")),
-                "status": "verified" if manifest.get("verified") else "resumable",
-            }
-        except (OSError, ValueError, TypeError):
             return {}
 
     def _remember_native_project(self, value: dict[str, str]) -> None:
@@ -307,6 +320,79 @@ class OrionAssistant:
             temporary.replace(activity.RUNTIME / "recent-native-project.json")
         except OSError:
             pass
+
+    def _clear_native_project_context(self, request_text: str) -> None:
+        previous = dict(self.active_native_project)
+        self.active_native_project = {}
+        self.previous_response_id = None
+        self.last_selected_tools = []
+        self.local_session_turns = []
+        try:
+            activity.RUNTIME.mkdir(parents=True, exist_ok=True)
+            temporary = (activity.RUNTIME / "recent-native-project.json").with_suffix(".tmp")
+            temporary.write_text("{}", encoding="utf-8")
+            temporary.replace(activity.RUNTIME / "recent-native-project.json")
+        except OSError:
+            pass
+        diagnostics.event(
+            "native_project_context_switched", previous_project=previous.get("project", ""),
+            request=request_text[:500],
+        )
+
+    @staticmethod
+    def _references_active_project(request_text: str, project: dict[str, str]) -> bool:
+        text = request_text.casefold()
+        project_words = {
+            word for word in re.findall(r"[a-z0-9]+", str(project.get("project", "")).casefold())
+            if len(word) >= 4 and word not in {"project", "design", "model"}
+        }
+        if project_words.intersection(re.findall(r"[a-z0-9]+", text)):
+            return True
+        return any(marker in text for marker in (
+            "existing project", "current project", "same project", "this project",
+            "existing file", "current file", "same file", "this file", "continue the",
+            "the project", "the file", "the scene",
+        ))
+
+    @classmethod
+    def _starts_new_engineering_project(cls, request_text: str, active_project: dict[str, str]) -> bool:
+        if not active_project:
+            return False
+        text = " ".join(request_text.casefold().replace("’", "'").split())
+        if re.search(r"\b(?:new|blank|separate)\s+(?:blender\s+)?(?:file|project|scene|design|model)\b", text):
+            return True
+        if cls._references_active_project(text, active_project):
+            return False
+        creation = re.search(r"\b(?:design|create|build|model|develop|generate)\b", text)
+        engineering_subject = re.search(
+            r"\b(?:clamp|mount|bracket|fixture|enclosure|assembly|mechanism|vehicle|robot|rover|"
+            r"part|product|structure|cad|blender|freecad|openscad|3d|printable|manufactur)\w*\b",
+            text,
+        )
+        return bool(creation and engineering_subject)
+
+    @staticmethod
+    def _is_direct_native_open_request(request_text: str) -> bool:
+        text = " ".join(request_text.casefold().replace("’", "'").split())
+        if re.search(r"\b(?:new|blank|create|design|build|model|generate|edit|modify|change|repair|fix|improve|make)\b", text):
+            return False
+        prefix = (
+            r"^(?:(?:okay|ok|please|yes)[, ]+)?(?:can you |could you |would you |"
+            r"i(?:'m| am) telling you to )?(?:open|load|display|show|bring)\b"
+        )
+        return bool(re.search(prefix, text))
+
+    @staticmethod
+    def _implies_active_project_refinement(request_text: str, active_project: dict[str, str]) -> bool:
+        if not active_project:
+            return False
+        text = " ".join(request_text.casefold().replace("’", "'").split())
+        return any(marker in text for marker in (
+            "good start", "take this further", "take it further", "next pass", "next level",
+            "not finished", "not ready", "still basic", "too basic", "needs work", "needs more",
+            "could be better", "more detail", "more realistic", "more polished", "more robust",
+            "more complete", "production ready", "sharper", "stronger", "safer",
+        ))
 
     def record_turn(self, user: str, assistant: str, *, local: bool = False) -> None:
         """Retain locally answered turns that are absent from the cloud thread."""
@@ -322,6 +408,15 @@ class OrionAssistant:
         activity.update("planning", "Planning…")
         planning_started = time.perf_counter()
         request_text = question.rsplit("\nUser:", 1)[-1].strip()
+        project_switched = self._starts_new_engineering_project(request_text, self.active_native_project)
+        if project_switched:
+            self._clear_native_project_context(request_text)
+        implicit_project_refinement = self._implies_active_project_refinement(
+            request_text, self.active_native_project,
+        )
+        mutation_requested = bool(
+            self.task_engine.action_requested(request_text) or implicit_project_refinement
+        )
         prior_task = self.task_engine.record
         resuming_pending_action = bool(
             prior_task and prior_task.plan.requires_tools
@@ -332,6 +427,19 @@ class OrionAssistant:
             self.client, self.model, self.reasoning_effort, request_text, allow_cloud=cloud_allowed,
             on_response=lambda response: self.platform.record_cloud("planning", self.model, response),
         )
+        # The full planner outcome can reveal a requested mutation after a
+        # diagnostic prerequisite. Tool authorization must follow that complete
+        # intent, not only the first verb in the user's sentence.
+        mutation_requested = bool(
+            mutation_requested
+            or self.task_engine.mutation_requested
+            or self.task_engine.plan_requests_mutation(request_text, plan)
+        )
+        self.task_engine.mutation_requested = mutation_requested
+        if mutation_requested:
+            plan.requires_tools = True
+            if plan.risk == "read_only":
+                plan.risk = "consequential"
         try:
             from orion_kernel import kernel
             kernel().adopt_plan(plan.goal, plan.steps, plan.success_criteria, plan.risk)
@@ -343,24 +451,49 @@ class OrionAssistant:
             lane=self.task_engine.lane, goal=plan.goal, steps=plan.steps,
             success_criteria=plan.success_criteria, risk=plan.risk,
         )
-        local_context = self.platform.context_for(request_text)
+        local_context = (
+            {"memories": [], "documents": [], "tasks": []}
+            if project_switched else self.platform.context_for(request_text)
+        )
         normalized_followup = " ".join(re.sub(r"[^a-z0-9 ]", " ", request_text.lower()).split())
         continuation = normalized_followup in {
             "yes", "yes please", "continue", "go ahead", "do it", "try again", "keep going", "please do",
             "yeah", "yeah do it", "yes do it", "check it", "check again",
-        }
-        referential = continuation or any(marker in normalized_followup for marker in (
-            "did you check", "didnt work", "wasnt", "still pending", "changes pending", "literally see",
-            "that ", " it ", "instead", "retry", "try again", "add ", "change ", "modify ",
-            "update ", "remove ", "make the", "make it", "the desk", "the project",
+        } or normalized_followup.startswith((
+            "sure do ", "yes do ", "yeah do ", "okay do ", "ok do ",
+            "do all of that", "do everything", "implement that", "carry that out",
         ))
+        referential = continuation or implicit_project_refinement or any(marker in normalized_followup for marker in (
+            "did you check", "didnt work", "didn t work", "wasnt", "wasn t", "still pending", "changes pending", "literally see",
+            "that ", " it ", "instead", "retry", "try again", "add ", "change ", "modify ",
+            "update ", "remove ", "make the", "make it", "the desk", "the project", "the file", "before",
+            "take this", "take it", "next pass", "next level", "production ready", "more polished",
+            "more realistic", "more robust", "more complete", "sharpen", "polish", "refine", "improve",
+        ))
+        if referential and prior_task and prior_task.plan.requires_tools and prior_task.plan.risk != "read_only":
+            mutation_requested = True
+            self.task_engine.mutation_requested = True
+            plan.requires_tools = True
+            if plan.risk == "read_only":
+                plan.risk = prior_task.plan.risk
+        # Tool routing must follow the current request, not action verbs copied
+        # from previous-turn context. The full context is still supplied to the
+        # model below for reference resolution.
         selection_request = request_text
-        if self.task_engine.anticipation:
-            selection_request += "\nLocally inferred objective family: " + str(self.task_engine.anticipation.get("category", ""))
-        if referential and self.local_session_turns:
-            selection_request += "\nRecent local turns: " + json.dumps(self.local_session_turns[-3:])
-        if referential and self.active_native_project:
-            selection_request += "\nActive native project: " + json.dumps(self.active_native_project)
+        # The planner is the semantic intent compiler for vague requests. Feed
+        # its current-turn outcome into capability routing so users do not need
+        # to memorize tool-trigger verbs such as "create" or "edit".
+        selection_request += (
+            "\nCurrent planned goal: " + plan.goal
+            + "\nCurrent planned steps: " + " | ".join(plan.steps[:10])
+            + "\nCurrent success criteria: " + " | ".join(plan.success_criteria[:10])
+        )
+        if referential and self.active_native_project and not any(
+            name in request_text.lower() for name in ("blender", "freecad", "openscad", "resolve")
+        ):
+            selection_request += "\nActive application: " + str(self.active_native_project.get("application", ""))
+            if mutation_requested and str(self.active_native_project.get("application", "")).casefold() == "blender":
+                selection_request += "\nRequested operation: edit existing Blender document"
         explicit_interrupted_resume = any(
             phrase in normalized_followup
             for phrase in ("previous task", "last task", "previous workflow", "last workflow")
@@ -371,7 +504,7 @@ class OrionAssistant:
         )
         if referential and interrupted_context:
             selection_request += "\nInterrupted or recent task to resume: " + json.dumps(interrupted_context[:1])
-        selected_tools = tools.select_definitions(selection_request)
+        selected_tools = tools.select_definitions(selection_request, allow_mutation=mutation_requested)
         if not selected_tools and continuation and self.last_selected_tools:
             selected_tools = self.last_selected_tools
         elif selected_tools:
@@ -405,12 +538,40 @@ class OrionAssistant:
             context_suffix += "\n\nActive native project in this session:\n" + json.dumps(self.active_native_project)
         planned_input = (question + context_suffix) if not complex_task else (
             f"User request:\n{question}\n\nStructured task plan:\n{self.task_engine.context()}\n"
-            "Execute the entire plan now. Do not merely describe it." + context_suffix
+            + (
+                "Execute the entire plan now. Do not merely describe it."
+                if mutation_requested
+                else "Inspect only the evidence needed to answer. Do not modify external state."
+            ) + context_suffix
         )
         diagnostics.event(
             "tool_lane_selected", request_id=request_id, lane=self.task_engine.lane,
             tools=[definition.get("name", definition.get("type", "tool")) for definition in selected_tools], reasoning=turn_effort,
+            mutation_requested=mutation_requested,
         )
+        direct_native_open = bool(
+            mutation_requested and self.active_native_project
+            and self._is_direct_native_open_request(request_text)
+            and self._references_active_project(request_text, self.active_native_project)
+            and re.search(r"\b(?:file|project|scene|rover|blender)\b", request_text, re.IGNORECASE)
+        )
+        if direct_native_open:
+            arguments = {
+                "application": str(self.active_native_project.get("application", "Blender")),
+                "project_name": str(self.active_native_project.get("project", "")),
+            }
+            action_id, _ = activity.begin_action("native_project_open", arguments)
+            result = tools.execute(
+                "native_project_open", arguments,
+                context={"request_id": request_id, "task_id": self.task_engine.record.task_id if self.task_engine.record else ""},
+            )
+            activity.finish_action(action_id, result)
+            self.task_engine.record_tool("native_project_open", result)
+            if result.get("ok"):
+                self.task_engine.finish("finished")
+                answer = tools.result_summary("native_project_open", arguments, result)
+                diagnostics.event("direct_native_open_completed", request_id=request_id, loaded=bool(result.get("loaded")))
+                return answer
         model_started = time.perf_counter()
         response = self._cloud_response_cancellable("assistant", request_id,
             model=self.model,
@@ -432,12 +593,13 @@ class OrionAssistant:
         tools_since_audit = False
         action_effect_evidence = False
         audit_performed = False
+        recovery_signatures: dict[str, int] = {}
         for _ in range(8):
             if request_id and execution_supervisor.cancellation_requested(request_id):
                 return self._finish_cancelled(request_id)
             calls = [item for item in response.output if item.type == "function_call"]
             if not calls:
-                if plan.requires_tools and (tools_since_audit or not audit_performed):
+                if mutation_requested and plan.requires_tools and (tools_since_audit or not audit_performed):
                     activity.update("verifying", "Checking…")
                     diagnostics.event("completion_audit_started", request_id=request_id)
                     audit_started = time.perf_counter()
@@ -467,7 +629,7 @@ class OrionAssistant:
                     continue
                 self.previous_response_id = response.id
                 answer = response.output_text.strip() or "I don't have a response for that."
-                if plan.requires_tools and not action_effect_evidence:
+                if mutation_requested and plan.requires_tools and not action_effect_evidence:
                     if answer.rstrip().endswith("?"):
                         self.task_engine.finish("awaiting_input")
                         diagnostics.event("action_waiting_for_input", request_id=request_id, answer_chars=len(answer))
@@ -479,7 +641,7 @@ class OrionAssistant:
                         model_answer=response.output_text[:500],
                     )
                     return answer
-                if not plan.requires_tools:
+                if not mutation_requested:
                     status = "answered"
                 elif answer.rstrip().endswith("?"):
                     status = "awaiting_input"
@@ -525,7 +687,7 @@ class OrionAssistant:
                 completed_calls.append((call.name, arguments if 'arguments' in locals() else {}, result))
                 if (result.get("ok") or result.get("resumable")) and call.name in {
                     "blender_create_project", "blender_refine_project", "freecad_create_project",
-                    "blender_create_advanced_project", "blender_resume_advanced_project", "openscad_create_project", "resolve_create_project", "native_project_open",
+                    "blender_create_advanced_project", "blender_inspect_existing_document", "blender_edit_existing_document", "blender_resume_advanced_project", "blender_revise_advanced_project", "openscad_create_project", "resolve_create_project", "native_project_open",
                 }:
                     self._remember_native_project({
                         "application": str(result.get("application") or arguments.get("application") or ""),
@@ -550,6 +712,33 @@ class OrionAssistant:
                     outputs = list(executor.map(run_call, calls))
             else:
                 outputs = [run_call(call) for call in calls]
+
+            stalled_recovery = None
+            for _, _, result in completed_calls:
+                if result.get("ok") or not result.get("resumable"):
+                    continue
+                records = list(result.get("validation_issue_records") or [])
+                codes = sorted(str(item.get("code", "")) for item in records)
+                fingerprint = "|".join((
+                    str(result.get("specification_hash") or (result.get("revision_context") or {}).get("specification_hash", "")),
+                    *codes,
+                ))
+                if not fingerprint.strip("|"):
+                    fingerprint = str(result.get("error_code", "")) + "|" + str(result.get("error", ""))[:300]
+                recovery_signatures[fingerprint] = recovery_signatures.get(fingerprint, 0) + 1
+                if recovery_signatures[fingerprint] >= 2:
+                    stalled_recovery = result
+                    diagnostics.event(
+                        "native_recovery_no_progress", level="warning", request_id=request_id,
+                        project=result.get("project", ""), specification_hash=fingerprint.split("|", 1)[0],
+                        issue_codes=codes,
+                    )
+                    break
+            if stalled_recovery:
+                self.task_engine.finish("resumable")
+                answer = self.task_engine.recovery_summary()
+                self.record_turn(request_text, answer, local=True)
+                return answer
             if any(tools.is_action_evidence(name, arguments, result) for name, arguments, result in completed_calls):
                 action_effect_evidence = True
 
@@ -596,12 +785,31 @@ class OrionAssistant:
                 "spotify_control", "spotify_play_playlist", "create_reminder", "create_note",
                 "install_application", "installation_status",
                 "blender_create_project", "freecad_create_project", "openscad_create_project",
-                "blender_refine_project", "blender_create_advanced_project", "blender_resume_advanced_project", "resolve_create_project", "native_project_open",
+                "blender_refine_project", "blender_create_advanced_project", "blender_edit_existing_document", "blender_resume_advanced_project", "blender_revise_advanced_project", "resolve_create_project", "native_project_open",
             }
             if re.match(r"^\s*(?:open|launch|start)\b", request_text, re.IGNORECASE):
                 locally_final_tools.add("open_application")
+            verified_native_delivery = bool(completed_calls) and all(
+                name in locally_final_tools and result.get("ok")
+                for name, _, result in completed_calls
+            ) and any(
+                name in {"blender_create_advanced_project", "blender_edit_existing_document", "blender_resume_advanced_project", "blender_revise_advanced_project"}
+                and result.get("verified")
+                and (
+                    result.get("loaded")
+                    or (
+                        name == "blender_edit_existing_document"
+                        and bool(result.get("disk_verification"))
+                    )
+                )
+                and (
+                    bool((result.get("design_review") or {}).get("passed"))
+                    or bool((result.get("audit") or {}).get("passed"))
+                )
+                for name, _, result in completed_calls
+            )
             if (
-                not complex_task and completed_calls
+                (not complex_task or verified_native_delivery) and completed_calls
                 and all(result.get("ok") for _, _, result in completed_calls)
                 and all(name in locally_final_tools for name, _, _ in completed_calls)
             ):
@@ -613,6 +821,7 @@ class OrionAssistant:
                     diagnostics.event(
                         "local_tool_confirmation", request_id=request_id,
                         tools=[name for name, _, _ in completed_calls], answer_chars=len(answer),
+                        verified_native_delivery=verified_native_delivery,
                     )
                     return answer
 
@@ -670,8 +879,12 @@ class OrionAssistant:
                 function_calls=len([item for item in response.output if item.type == "function_call"]),
             )
 
-        self.task_engine.finish("blocked")
+        self.task_engine.finish("resumable" if self.task_engine.record and self.task_engine.record.recovery else "blocked")
         diagnostics.event("execution_limit_reached", level="error", request_id=request_id, rounds=8)
+        if self.task_engine.record and self.task_engine.record.recovery:
+            answer = self.task_engine.recovery_summary()
+            self.record_turn(request_text, answer, local=True)
+            return answer
         raise RuntimeError("ORION could not verify completion within the bounded execution limit.")
 
     def transcribe(self, audio_path: Path) -> str:

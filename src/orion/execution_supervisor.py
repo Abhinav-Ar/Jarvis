@@ -27,6 +27,13 @@ SAFE_RETRY_TOOLS = {
     "open_application", "browser_navigate", "desktop_window_arrange",
 }
 
+# These are expected design feedback, not adapter crashes. Opening a circuit on
+# them prevents the worker from applying the correction it just discovered.
+RECOVERABLE_DESIGN_CODES = {
+    "design_quality_gate_failed", "invalid_advanced_scene", "draft_revision_required",
+    "render_quality_gate_failed", "revision_target_missing", "revision_component_exists",
+}
+
 
 def begin_request(request_id: str) -> None:
     """Clear cancellation left over from an older request, never a live one."""
@@ -176,7 +183,7 @@ def snapshot(tool: str, arguments: dict) -> dict:
             )
         except Exception:
             pass
-    elif tool in {"native_project_open", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "blender_resume_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project"}:
+    elif tool in {"native_project_open", "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "blender_inspect_existing_document", "blender_edit_existing_document", "blender_resume_advanced_project", "blender_revise_advanced_project", "freecad_create_project", "openscad_create_project", "resolve_create_project"}:
         state["project"] = str(arguments.get("project_name", ""))[:200]
         state["application"] = str(arguments.get("application", ""))[:100]
     return state
@@ -258,7 +265,10 @@ def execute(
                 },
             }
     health = platform().tool_failure_window(tool)
-    if int(health.get("failures", 0)) >= 3:
+    if (
+        int(health.get("failures", 0)) >= 3
+        and str(health.get("latest_error_code", "")) not in RECOVERABLE_DESIGN_CODES
+    ):
         diagnostics.event(
             "execution_circuit_opened", request_id=request_id, task_id=task_id,
             tool=tool, failures=health.get("failures"),

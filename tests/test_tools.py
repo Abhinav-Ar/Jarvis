@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import tools
 import integrations
+from task_engine import TaskEngine
 
 
 class ToolTests(unittest.TestCase):
@@ -45,7 +46,7 @@ class ToolTests(unittest.TestCase):
                 "capability_families_status", "objective_compile", "google_drive_search",
                 "google_create_spreadsheet", "google_create_document", "google_create_presentation",
                 "design_project_plan",
-                "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "blender_resume_advanced_project", "freecad_create_project",
+                "blender_create_project", "blender_refine_project", "blender_create_advanced_project", "blender_inspect_advanced_project", "blender_inspect_existing_document", "blender_edit_existing_document", "blender_resume_advanced_project", "blender_revise_advanced_project", "freecad_create_project",
                 "openscad_create_project", "resolve_create_project", "native_project_open",
                 "install_application", "installation_status",
             }
@@ -81,6 +82,49 @@ class ToolTests(unittest.TestCase):
         )}
         self.assertIn("blender_create_advanced_project", names)
         self.assertIn("blender_resume_advanced_project", names)
+        self.assertIn("blender_revise_advanced_project", names)
+
+    def test_blender_question_exposes_inspection_but_no_mutation(self):
+        names = {definition.get("name", definition["type"]) for definition in tools.select_definitions(
+            "Why are the collections in my open Blender rover not attached?", allow_mutation=False,
+        )}
+        self.assertIn("blender_inspect_advanced_project", names)
+        self.assertIn("blender_inspect_existing_document", names)
+        self.assertIn("desktop_inspect", names)
+        self.assertNotIn("desktop_action", names)
+        self.assertNotIn("blender_revise_advanced_project", names)
+        self.assertNotIn("native_project_open", names)
+
+    def test_existing_blender_edit_exposes_native_document_editor(self):
+        names = {definition.get("name", definition["type"]) for definition in tools.select_definitions(
+            "Edit the current rover inside Blender and attach its suspension", allow_mutation=True,
+        )}
+        self.assertIn("blender_inspect_existing_document", names)
+        self.assertIn("blender_edit_existing_document", names)
+        self.assertNotIn("desktop_action", names)
+        self.assertNotIn("create_reminder", names)
+        self.assertNotIn("set_light", names)
+
+    def test_referential_blender_edit_keeps_document_editor_available(self):
+        names = {definition.get("name", definition["type"]) for definition in tools.select_definitions(
+            "Sure, do all of that. Active application: Blender. Requested operation: edit existing Blender document",
+            allow_mutation=True,
+        )}
+        self.assertIn("blender_inspect_existing_document", names)
+        self.assertIn("blender_edit_existing_document", names)
+
+    def test_inspect_and_improve_blender_prompt_keeps_write_and_backup_worker(self):
+        request = (
+            "Inspect and improve my currently open Blender project as an existing engineering assembly. "
+            "Do not rebuild it from scratch. Enact the repairs in the existing project, save a backup, "
+            "verify the changes, and reopen the edited file."
+        )
+        self.assertTrue(TaskEngine.action_requested(request))
+        names = {definition.get("name", definition["type"]) for definition in tools.select_definitions(
+            request, allow_mutation=True,
+        )}
+        self.assertIn("blender_inspect_existing_document", names)
+        self.assertIn("blender_edit_existing_document", names)
 
     def test_rover_followup_keeps_native_project_workers_available(self):
         names = {definition.get("name", definition["type"]) for definition in tools.select_definitions(
@@ -88,7 +132,23 @@ class ToolTests(unittest.TestCase):
         )}
         self.assertIn("blender_create_advanced_project", names)
         self.assertIn("blender_resume_advanced_project", names)
+        self.assertIn("blender_revise_advanced_project", names)
         self.assertIn("native_project_open", names)
+
+    def test_new_project_negation_does_not_collapse_into_existing_edit_lane(self):
+        request = (
+            "Start a completely new engineering project for a LEGO wall mount in Blender. "
+            "Do not reuse or modify any existing project."
+        )
+        names = {definition.get("name", definition["type"]) for definition in tools.select_definitions(
+            request, allow_mutation=True,
+        )}
+        self.assertIn("design_project_plan", names)
+        self.assertIn("blender_create_advanced_project", names)
+        self.assertIn("web_search", names)
+        self.assertNotIn("create_reminder", names)
+        self.assertNotIn("create_note", names)
+        self.assertNotIn("create_email_draft", names)
 
     def test_inferred_objective_family_exposes_required_worker(self):
         names = {definition.get("name", definition["type"]) for definition in tools.select_definitions(

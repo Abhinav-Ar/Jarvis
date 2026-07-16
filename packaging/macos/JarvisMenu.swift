@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     private var detailMenuItem: NSMenuItem!
     private var desktopControlItem: NSMenuItem!
     private var platformMenuItem: NSMenuItem!
+    private var personalMenuItem: NSMenuItem!
     private var cloudMenuItem: NSMenuItem!
     private var inputModeItem: NSMenuItem!
     private var pushToTalkMonitor: Any?
@@ -67,6 +68,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         platformMenuItem = NSMenuItem(title: "Agent platform: starting…", action: nil, keyEquivalent: "")
         platformMenuItem.isEnabled = false
         menu.addItem(platformMenuItem)
+        personalMenuItem = NSMenuItem(title: "Personal context: starting…", action: nil, keyEquivalent: "")
+        personalMenuItem.isEnabled = false
+        menu.addItem(personalMenuItem)
         cloudMenuItem = NSMenuItem(title: "Cloud Limit: checking…", action: #selector(toggleCloudLimit), keyEquivalent: "b")
         menu.addItem(cloudMenuItem)
         desktopControlItem = NSMenuItem(title: "Enable Desktop Control", action: #selector(toggleDesktopControl), keyEquivalent: "d")
@@ -87,6 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Screen Recording Permission…", action: #selector(openScreenPermission), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Accessibility Permission…", action: #selector(openAccessibilityPermission), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Full Disk Access for Messages…", action: #selector(openFullDiskPermission), keyEquivalent: ""))
         for item in menu.items { item.target = self }
         statusItem.menu = menu
 
@@ -279,12 +284,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
             let goals = value["active_goals"] as? Int ?? 0
             let facts = value["world_facts"] as? Int ?? 0
             let adapters = value["adapters"] as? Int ?? 0
+            let personalEvents = value["personal_events"] as? Int ?? 0
+            let knownPeople = value["known_people"] as? Int ?? 0
+            let personalConnectors = value["personal_connectors_ready"] as? Int ?? 0
             let availableFamilies = value["capability_families_available"] as? Int ?? 0
             let totalFamilies = value["capability_families_total"] as? Int ?? 0
             let project = value["active_project"] as? String ?? ""
             let projectLabel = project.isEmpty ? "no active project" : "project: \(project)"
             let recoveryLabel = interrupted > 0 ? " • \(interrupted) resumable" : ""
             platformMenuItem.title = "ORION: \(availableFamilies)/\(totalFamilies) families • \(projectLabel) • \(goals) goals • \(facts) observations • \(adapters) adapters • \(checkpoints) verified actions • \(tasks) tasks\(recoveryLabel) • \(calls) cloud calls"
+            personalMenuItem.title = "Personal context: \(personalEvents) events • \(knownPeople) people • \(personalConnectors) sources ready"
             cloudMenuItem.title = limitEnabled
                 ? "Cloud Limit: On • \(calls) / \(baseLimit)"
                 : "Cloud Limit: Off • \(calls) calls"
@@ -675,6 +684,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
     @objc private func openScreenPermission() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    @objc private func openFullDiskPermission() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
             NSWorkspace.shared.open(url)
         }
     }

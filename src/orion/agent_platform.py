@@ -584,6 +584,14 @@ class AgentPlatform:
                     "monitors": db.execute("SELECT COUNT(*) FROM event_rules WHERE enabled=1").fetchone()[0],
                     "replay_turns": db.execute("SELECT COUNT(*) FROM replay_turns").fetchone()[0],
                 })
+            if "personal_events" in tables:
+                counts.update({
+                    "personal_events": db.execute("SELECT COUNT(*) FROM personal_events").fetchone()[0],
+                    "known_people": db.execute("SELECT COUNT(*) FROM people").fetchone()[0],
+                    "personal_connectors_ready": db.execute(
+                        "SELECT COUNT(*) FROM connector_state WHERE status='ready'"
+                    ).fetchone()[0],
+                })
         counts["active_project"] = counts["active_project"][0] if counts["active_project"] else ""
         counts["cloud_base_limit"] = int(os.getenv("ORION_MAX_CLOUD_CALLS_PER_DAY", os.getenv("JARVIS_MAX_CLOUD_CALLS_PER_DAY", "100")))
         counts["cloud_limit_enabled"] = not self.cloud_limit_disabled_flag.exists()
@@ -612,6 +620,13 @@ def platform() -> AgentPlatform:
 
 def initialize_platform() -> AgentPlatform:
     agent = platform()
+    # Create the local personal-timeline schema at startup so connector health
+    # and indexed-event counts are visible before the first recall request.
+    try:
+        import personal_intelligence
+        personal_intelligence.personal().connector_status()
+    except Exception as exc:
+        diagnostics.event("personal_intelligence_startup_failed", level="warning", error=str(exc))
     recovered = agent.recover_interrupted_tasks()
     if recovered.get("recovered_tasks") or recovered.get("recovered_checkpoints"):
         diagnostics.event(
@@ -630,6 +645,7 @@ def initialize_platform() -> AgentPlatform:
         "replay_diagnostics": (True, "Sanitized request routing and outcome replay"),
         "adapter_registry": (True, "Native, semantic, API, and cloud capability registry"),
         "intelligence_router": (True, "Local-first routing with bounded cloud escalation"),
+        "personal_intelligence": (True, "Private timeline, relationships, and source-aware recall"),
         "codex_worker": (
             bool(shutil.which("codex") or Path("/Applications/ChatGPT.app/Contents/Resources/codex").exists()),
             "Asynchronous workspace-write code generation",

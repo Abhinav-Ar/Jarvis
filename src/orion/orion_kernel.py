@@ -255,6 +255,9 @@ class OrionKernel:
 
     def register_default_adapters(self) -> None:
         definitions = {
+            "Personal Timeline": ("personal", "local", ["message_recall", "relationship_aliases", "source_attribution", "connector_health"]),
+            "Apple Messages": ("personal", "local_read_only", ["conversation_search", "plan_recall", "timestamps"]),
+            "Discord": ("personal", "authorized_export_or_oauth", ["conversation_search", "channel_context"]),
             "macOS": ("system", "native", ["applications", "windows", "power", "notifications"]),
             "Accessibility": ("desktop", "semantic", ["inspect", "press", "fill", "window_state"]),
             "Git": ("development", "native", ["status", "commit", "push", "verify"]),

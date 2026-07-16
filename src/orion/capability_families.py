@@ -46,6 +46,12 @@ def families() -> dict[str, Family]:
     creative = any(_app(name) for name in ("Adobe Photoshop 2026", "Adobe Illustrator 2026", "Adobe Premiere Pro 2026", "DaVinci Resolve", "Movavi Video Editor 26", "Blender"))
     cad = any(_app(name) for name in ("Autodesk Fusion", "Fusion 360", "AutoCAD", "FreeCAD", "OpenSCAD", "Rhino 8", "Shapr3D", "Blender"))
     return {
+        "personal_intelligence": Family(
+            "Personal Intelligence", "Private relationship memory, communication recall, plans, and everyday context across authorized sources.",
+            ("messages.recall", "people.resolve", "timeline.search", "plans.recover", "connectors.status"),
+            ("message", "imessage", "discord", "who said", "when did", "what did", "told me", "texted me", "pick me up", "personal"),
+            True, "local_first",
+        ),
         "google_workspace": Family(
             "Google Workspace", "Drive-native spreadsheets, documents, presentations, and file organization.",
             ("drive.search", "sheets.create", "sheets.design", "docs.create", "slides.create"),
@@ -102,7 +108,7 @@ def select_families(objective: str) -> list[Family]:
     text = objective.lower()
     selected = [family for family in families().values() if any(marker in text for marker in family.markers)]
     if not selected:
-        selected = [families()["macos"]]
+        selected = [families()["personal_intelligence"]]
     # Business objectives require an artifact surface; prefer whichever office
     # family is available without making the user name that implementation detail.
     names = {family.name for family in selected}

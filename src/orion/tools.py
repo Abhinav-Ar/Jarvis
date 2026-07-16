@@ -19,6 +19,7 @@ import anticipation
 import recovery
 import execution_supervisor
 import app_installer
+import personal_intelligence
 from agent_platform import platform
 
 
@@ -523,6 +524,28 @@ TOOL_DEFINITIONS = [
         "strict": True,
     },
     {
+        "type": "function", "name": "personal_recall",
+        "description": "Search the user's authorized local personal timeline across Messages and imported communication sources. Use for questions about who said what, when plans were made, or prior personal conversations. Return only the smallest relevant excerpts.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "person": {"type": "string"},
+                "sources": {"type": "array", "items": {"type": "string", "enum": ["messages", "discord"]}},
+                "limit": {"type": "integer"},
+            },
+            "required": ["query", "person", "sources", "limit"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+    {
+        "type": "function", "name": "personal_connections",
+        "description": "Report which personal-data connectors are ready, unavailable, or awaiting permission without exposing their private content.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        "strict": True,
+    },
+    {
         "type": "function", "name": "memory_store",
         "description": "Store a durable personal preference or fact only when the user explicitly asks ORION to remember it.",
         "parameters": {"type": "object", "properties": {"key": {"type": "string"}, "value": {"type": "string"}}, "required": ["key", "value"], "additionalProperties": False},
@@ -892,6 +915,7 @@ TOOL_GROUPS = {
         "create_reminder", "create_note", "create_calendar_event", "todoist_create_task",
         "create_email_draft", "find_contact", "find_files", "apple_shortcuts",
     },
+    "personal": {"personal_recall", "personal_connections", "find_contact"},
     "home": {"home_assistant_control"},
     "desktop": {"open_application", "desktop_inspect", "desktop_action", "desktop_accessibility_inspect", "desktop_local_ocr", "desktop_accessibility_set", "desktop_accessibility_press", "desktop_window_arrange", "desktop_window_restore"},
     "git": {"open_application", "git_repositories", "git_status", "git_commit", "git_commit_and_push", "git_push", "desktop_accessibility_inspect", "desktop_local_ocr", "desktop_accessibility_set", "desktop_accessibility_press", "desktop_window_arrange", "desktop_window_restore"},
@@ -944,6 +968,7 @@ def select_definitions(request: str, *, allow_mutation: bool = True) -> list[dic
         (("blender", "freecad", "free cad", "openscad", "open scad", "davinci", "da vinci", "resolve"), "desktop"),
         (("weather", "news", "search", "website", "url", ".com", "safari", "browser"), "web"),
         (("reminder", "note", "calendar", "todoist", "email", "contact", "file", "shortcut"), "productivity"),
+        (("who said", "when did", "what did", "where did", "messages", "imessage", "discord", "texted me", "told me", "pick me up", "personal connections"), "personal"),
         (("light", "thermostat", "home assistant", "switch"), "home"),
         (("open ", "launch ", "close ", "quit ", "exit ", "volume", "clipboard", "battery", "system status", "notification"), "mac"),
         (("remember", "forget", "memory", "what do you know", "orion status", "jarvis status", "agent status", "indexed", "knowledge", "workflow", "working on", "world state"), "agent"),
@@ -1245,6 +1270,8 @@ def execute(name: str, arguments: dict, context: dict | None = None) -> dict:
         "git_push": git_tools.push,
         "agent_status": orion_status,
         "task_history_search": platform().recent_tasks,
+        "personal_recall": personal_intelligence.personal().recall,
+        "personal_connections": personal_intelligence.personal().connector_status,
         "memory_store": platform().remember,
         "memory_search": platform().search_memory,
         "memory_forget": platform().forget,
@@ -1349,6 +1376,12 @@ def result_summary(name: str, arguments: dict, result: dict) -> str:
         return f"{result.get('repository')} is pushed and synchronized with GitHub."
     if name == "memory_store":
         return f"I’ll remember {arguments.get('key')}."
+    if name == "personal_recall":
+        matches = result.get("matches", [])
+        if not matches:
+            return "I couldn’t find a matching conversation in the personal sources currently connected."
+        best = matches[0]
+        return f'{best.get("sender") or "They"} said “{best.get("content", "")[:400]}” on {best.get("when", "the recorded date")} in {best.get("source", "the connected source")}.'
     if name == "memory_forget":
         return f"I forgot {arguments.get('key')}."
     if name == "orion_teach_workflow":

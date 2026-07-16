@@ -38,7 +38,7 @@ class ToolTests(unittest.TestCase):
                 "git_repositories", "git_status", "git_commit_and_push",
                 "git_commit", "git_push",
                 "agent_status", "task_history_search", "memory_store", "memory_search", "memory_forget",
-                "local_knowledge_search",
+                "local_knowledge_search", "personal_recall", "personal_connections",
                 "project_session_start", "project_session_resume", "project_session_status",
                 "project_session_close",
                 "orion_goal_status", "orion_world_state", "orion_workflows", "orion_teach_workflow",

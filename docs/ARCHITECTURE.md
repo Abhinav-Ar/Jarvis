@@ -9,6 +9,8 @@ allowing individual workers to evolve independently.
 - `src/orion/` owns the Python runtime, orchestration, workers, integrations, and
   local persistence. Runtime modules live together so the background deployment
   is atomic and imports cannot accidentally resolve against development-only files.
+- `src/orion/personal_intelligence.py` owns the private personal timeline,
+  relationship aliases, connector health, and local-first recall.
 - `packaging/macos/` owns the Swift menu controller, HUD, desktop helper, launchd
   definitions, and bundle metadata.
 - `scripts/` owns setup, development launch, deployment, removal, and validation.
@@ -34,6 +36,9 @@ Entrypoints may depend on orchestration; orchestration may depend on capabilitie
 capabilities may depend on integrations and workers. Workers may depend on shared
 workspace, diagnostics, and supervision modules. Integrations and workers must not
 import the interactive entrypoint.
+
+Engineering and creative workers are specialist leaves behind the central personal
+intelligence and conversation layers; they are not the default routing destination.
 
 ## Compatibility
 

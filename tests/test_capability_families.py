@@ -36,6 +36,7 @@ class CapabilityFamilyTests(unittest.TestCase):
     def test_registry_contains_all_broad_families(self):
         names = set(capability_families.families())
         self.assertEqual(names, {
+            "personal_intelligence",
             "google_workspace", "microsoft_365", "development", "creative",
             "engineering", "business", "research", "macos",
         })

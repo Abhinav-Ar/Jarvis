@@ -38,6 +38,15 @@ def _stage(application: str, request_id: str = "") -> None:
 def execute(text: str, request_id: str = "") -> str | None:
     raw = " ".join(text.lower().strip().split()).rstrip(".,!?")
     raw = re.sub(r"^(?:hey|okay|ok|please)[, ]+", "", raw)
+
+    # Personal recall stays local and deterministic for common questions. This
+    # avoids sending private message history to a cloud model just to answer a
+    # straightforward who/what/when question.
+    if re.search(r"\b(?:when|what|where)\s+did\s+.+?\s+(?:say|tell|mention|text)\b", raw):
+        import personal_intelligence
+        answer = personal_intelligence.local_recall_answer(text)
+        if answer:
+            return answer
     workspace_match = re.fullmatch(
         r"(?:open|launch) (.+?) and (.+?)(?:,)? (?:"
         r"then (?:arrange|tile) (?:them|the windows)(?: .*)?"

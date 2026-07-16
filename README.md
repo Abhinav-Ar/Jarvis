@@ -24,6 +24,9 @@ ORION now runs six durable local subsystems around the existing action engine:
   success criteria, risk, evidence, and a lifecycle that follow-ups can resume.
 - **Four-layer memory:** working memory for the live session, episodic task history,
   semantic preferences and facts, and procedural user-taught workflows.
+- **Personal intelligence:** a private, source-aware timeline across authorized
+  Messages, Contacts, and imported communication data for questions like “When did
+  Alex say he would pick me up?” Common recall stays local and avoids paid model calls.
 - **Event monitor:** low battery, low disk, and scheduled-work watchers operate locally
   in the background and use cooldowns instead of repeatedly firing.
 - **Adapter registry and intelligence router:** native and deterministic routes are
@@ -492,4 +495,6 @@ provide a complete lifetime listening ledger.
 
 Run `./scripts/check.sh` before installing a background build. See
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and
-[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for ownership and delivery rules.
+[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for ownership and delivery rules. See
+[`docs/PERSONAL_INTELLIGENCE.md`](docs/PERSONAL_INTELLIGENCE.md) for connector and
+privacy setup.
